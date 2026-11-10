@@ -10,6 +10,11 @@ dependencies = [
     "valkey>=6.0.0",
 ]
 
+[tool.uv.sources]
+# goneby is this local library, not a PyPI package; PM's admission resolver
+# needs a path source or `uv lock` cannot find it in any registry.
+goneby = { path = "/home/rahlquist/goneby", editable = true }
+
 # Directory plugin: Hermes reads `dependencies` from this file and prepares
 # them through PM. There is no importable package here — `register()` lives in
 # __init__.py and is loaded by the plugin loader, not via an entry point.
