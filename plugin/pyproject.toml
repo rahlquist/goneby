@@ -7,6 +7,7 @@ dependencies = [
     "goneby",
     "cryptography>=42.0.0",
     "httpx>=0.27.0",
+    "valkey>=6.0.0",
 ]
 
 # Directory plugin: Hermes reads `dependencies` from this file and prepares

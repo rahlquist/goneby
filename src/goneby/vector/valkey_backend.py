@@ -20,9 +20,9 @@ class ValkeyBackend(VectorBackend):
 
     async def connect(self) -> None:
         """Initialize Valkey connection."""
-        import valkey
+        import valkey.asyncio
 
-        self._client = valkey.Valkey(
+        self._client = valkey.asyncio.Valkey(
             host=self._host,
             port=self._port,
             db=self._db,
