@@ -198,7 +198,21 @@ database is required. The fake is **not** semantic — it validates plumbing (ba
 ordering, MRL truncation, normalization, round trips, idempotency), not retrieval
 quality. Verify ranking against a real model before trusting it.
 
-`scripts/live_check.py` exercises the embedder against a live HTTP server on :8081.
+`scripts/live_check.py` exercises the embedder plumbing (batching, MRL,
+normalization, round trips) against a **fake** vector server on :8081 —
+it validates transport, not ranking quality.
+
+## Live Deployment (this host, 2026-11-10)
+
+| Piece | Where |
+|---|---|
+| Embedder | `llama-server` b12261 (CPU) at `~/.local/opt/llama.cpp/`, serving `~/models/Qwen3-Embedding-0.6B-Q8_0.gguf` on `127.0.0.1:8091` |
+| Services | systemd **user** units `goneby-embedder` and `goneby-valkey` (valkey on `127.0.0.1:6379`, data in `~/.goneby/valkey`) |
+| Config | `GONEBY_ENCRYPTION_KEY` and `GONEBY_EMBEDDING_BASE_URL` live in `~/.hermes/.env` (mode 600); the key is recorded nowhere else |
+| Verified | real-model ranking: related/unrelated cosine 0.67/0.25; top hit 0.79; project-scoped search isolation proven; WAL ciphertext-at-rest proven; `goneby status` reports embedder UP |
+
+Manage with `systemctl --user {status,restart} goneby-embedder goneby-valkey`.
+Logs: `journalctl --user -u goneby-embedder`.
 
 ## License
 

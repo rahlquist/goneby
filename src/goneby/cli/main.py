@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from goneby.config.settings import GoneByConfig
+from goneby.config.settings import GoneByConfig, project_wal_path
 from goneby.crypto.cipher import Cipher
 from goneby.wal.manager import WALManager
 
@@ -35,7 +35,8 @@ def cmd_append(args: argparse.Namespace) -> int:
         return 1
 
     cipher = Cipher(config.encryption_key)
-    wal = WALManager(config.wal_path, cipher)
+    wal_file = project_wal_path(config.wal_path, config.project)
+    wal = WALManager(wal_file, cipher)
 
     content = args.content
     if args.file:
@@ -45,7 +46,7 @@ def cmd_append(args: argparse.Namespace) -> int:
     entry_type = args.type or "note"
     wal.append(content, {"type": entry_type})
 
-    print(f"Entry appended to {config.wal_path}")
+    print(f"Entry appended to {wal_file}")
     print(f"Total entries: {wal.entry_count}")
     return 0
 
@@ -61,10 +62,11 @@ def cmd_read(args: argparse.Namespace) -> int:
         return 1
 
     cipher = Cipher(config.encryption_key)
-    wal = WALManager(config.wal_path, cipher)
+    wal_file = project_wal_path(config.wal_path, config.project)
+    wal = WALManager(wal_file, cipher)
 
     entries = wal.read_all()
-    print(f"WAL: {config.wal_path}")
+    print(f"WAL: {wal_file}")
     print(f"Entries: {len(entries)}")
     print()
 
@@ -95,7 +97,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     print("=" * 46)
     print("Version:     0.1.0")
     print(f"Project:     {config.project}")
-    print(f"WAL path:    {config.wal_path}")
+    print(f"WAL base:    {config.wal_path}")
+    print(f"Project WAL: {project_wal_path(config.wal_path, config.project)}")
     print(f"Vector:      {config.vector_backend}")
     print(f"Embedding:   {config.embedding_model}")
     print(f"  endpoint:  {config.embedding_base_url}")
@@ -104,7 +107,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     if config.encryption_key:
         cipher = Cipher(config.encryption_key)
-        wal = WALManager(config.wal_path, cipher)
+        wal = WALManager(project_wal_path(config.wal_path, config.project), cipher)
         print(f"WAL entries: {wal.entry_count}")
     else:
         print("WAL entries: (GONEBY_ENCRYPTION_KEY not set)")
