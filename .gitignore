@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environments
+.venv/
+.env
+.env.*
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Runtime data — WALs and keys never belong in the repo
+.goneby/
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store

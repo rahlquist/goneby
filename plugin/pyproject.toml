@@ -1,0 +1,14 @@
+[project]
+name = "goneby-hermes-plugin"
+version = "0.1.0"
+description = "Hermes plugin surface for GoneBy retroactive project memory"
+requires-python = ">=3.11"
+dependencies = [
+    "goneby",
+    "cryptography>=42.0.0",
+    "httpx>=0.27.0",
+]
+
+# Directory plugin: Hermes reads `dependencies` from this file and prepares
+# them through PM. There is no importable package here — `register()` lives in
+# __init__.py and is loaded by the plugin loader, not via an entry point.

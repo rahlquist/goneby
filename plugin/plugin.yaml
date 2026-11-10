@@ -1,0 +1,14 @@
+name: goneby
+version: 0.1.0
+description: "Retroactive project memory — encrypted per-project WAL capture at every turn, backward-walk filtering against the shipped product, and scoped semantic recall."
+author: "rahlquist"
+provides_tools:
+  - wall_append
+  - wall_read
+  - walk_backward
+  - store_memory
+  - query_memory
+  - goneby_status
+provides_hooks:
+  - pre_llm_call
+  - post_compaction
