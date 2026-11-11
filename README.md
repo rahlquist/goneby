@@ -283,13 +283,14 @@ Guidelines that matter more than the exact paths:
 - `goneby status` probes the whole chain (config + live embedder) — make it
   part of any health check.
 
-### Plugin path source (Hermes)
+### Plugin dependency source (Hermes)
 
-`plugin/pyproject.toml` declares `goneby` as a `tool.uv.sources` **path**
-dependency, because it is not on PyPI yet. Hermes' admission resolver
-(`uv lock`) needs that declaration, and it must be an **absolute path to
-your checkout** — e.g. `<your-checkout>/goneby`. Set it once after cloning;
-`hermes plugins enable goneby` then installs and enables cleanly.
+`plugin/pyproject.toml` declares `goneby` as a `tool.uv.sources` **relative
+path** dependency (`".."` — the library at this repository's root). Nothing
+to configure: any clone resolves it, and the library pin is the plugin pin.
+`hermes plugins enable goneby` (or a catalog install) rewrites the path to
+its own checkout at admission — verified clean-room in a container with no
+other GoneBy on the system.
 
 ### Verified reference deployment
 

@@ -45,8 +45,12 @@ Mem0/MemGPT/Cognee/Letta.
 - **Background process:** one daemon-thread event loop for async embedder/
   store work; bounded hook bodies (never blocks a turn; default recall off).
 - **Secrets:** `GONEBY_ENCRYPTION_KEY` read via `agent.secret_scope.get_secret`
-  (fail-closed under multiplexing). `goneby` is on PyPI — plain dependency,
-  no path source (verified by a clean-venv install before submission).
+(fail-closed under multiplexing).
+- **Dependency graph:** the plugin depends on the `goneby` library via a
+relative `tool.uv.sources` path inside this same repo — no registry, no
+network fetch at lock time; the review pin covers library + plugin as one
+tree. Clean-room verified (fresh container, PM-style rewrite): uv locks
+15 packages, builds, imports.
 - **Self-update:** none. Updates via SHA-bump PR like everyone else.
 
 ## Validation
