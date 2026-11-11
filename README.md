@@ -10,6 +10,13 @@ Valkey, keys, smoke test): [`docs/SETUP.md`](docs/SETUP.md).**
 **→ Full documentation of the mechanism, benefits, and every user option:
 [`docs/OVERVIEW.md`](docs/OVERVIEW.md).**
 
+## Watch
+
+[![GoneBy — 1:40 narrated explainer](docs/goneby-explainer-poster.jpg)](https://github.com/rahlquist/goneby/releases/download/v1.0.0/goneby-explainer.mp4)
+
+*The Rewind* — the problem, the backward walk, and the four phases, narrated
+and captioned. [Release asset (MP4, 13 MB)](https://github.com/rahlquist/goneby/releases/tag/v1.0.0)
+
 ## How It Works
 
 1. **Capture (WAL):** Every turn is appended to an encrypted per-project
