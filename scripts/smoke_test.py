@@ -124,7 +124,7 @@ async def main() -> int:
             for entry_id in indexed_ids:  # leave the store as we found it
                 await backend.delete(entry_id)
             await store.disconnect()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110 - cleanup is best-effort
             pass
 
     # Stage 4: encrypted WAL round trip (throwaway project slug, cleaned up)
