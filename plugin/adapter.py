@@ -35,6 +35,35 @@ logger = logging.getLogger(__name__)
 ENTRY_TYPES = ("decision", "finding", "note", "constraint")
 
 
+class _ScopedEnv:
+    """GONEBY_* reads that honour Hermes' per-profile secret scope.
+
+    Hermes's documented secret route is ``agent.secret_scope.get_secret``:
+    under multiplexed profiles it resolves the *active* profile's value, and
+    it raises (rather than falling back) when no scope is bound — so we fail
+    closed instead of leaking another profile's environment. Outside Hermes
+    (MCP server, CLI, plain tests) the module is absent and we read
+    ``os.environ`` normally.
+    """
+
+    def get(self, name: str, default: str = "") -> str:
+        import os
+
+        if not name.startswith("GONEBY_"):
+            return os.environ.get(name, default)
+        try:
+            from agent.secret_scope import get_secret
+        except ImportError:
+            return os.environ.get(name, default)
+        try:
+            value = get_secret(name)
+        except Exception:  # noqa: BLE001 - scope unset under multiplexing
+            return ""      # fail closed: no secret for this profile
+        if value is None:
+            return os.environ.get(name, default)
+        return value
+
+
 def message_text(message: dict[str, Any]) -> str:
     """Flatten an OpenAI-format message to plain text.
 
@@ -91,7 +120,8 @@ class GoneByPlugin:
 
         from goneby.config.settings import GoneByConfig, project_wal_path
 
-        self._config = GoneByConfig.from_env()
+        self._scoped_env = _ScopedEnv()
+        self._config = GoneByConfig.from_env(self._scoped_env)
         self._wal_path = project_wal_path(self._config.wal_path, self._config.project)
 
         # Opt-in recall: a search on every turn costs latency.
@@ -136,15 +166,11 @@ class GoneByPlugin:
     # Environment helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _env(name: str, default: str = "") -> str:
-        import os
+    def _env(self, name: str, default: str = "") -> str:
+        return self._scoped_env.get(name, default)
 
-        return os.environ.get(name, default)
-
-    @classmethod
-    def _env_flag(cls, name: str, *, default: bool) -> bool:
-        raw = cls._env(name).strip().lower()
+    def _env_flag(self, name: str, *, default: bool) -> bool:
+        raw = self._env(name).strip().lower()
         if not raw:
             return default
         return raw in ("1", "true", "yes", "on")

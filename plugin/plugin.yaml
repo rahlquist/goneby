@@ -2,6 +2,9 @@ name: goneby
 version: 1.0.0
 description: "Retroactive project memory — encrypted per-project WAL capture at every turn, backward-walk filtering against the shipped product, and scoped semantic recall."
 author: "rahlquist"
+requires_hermes: ">=0.23.0"
+requires_env:
+  - GONEBY_ENCRYPTION_KEY
 provides_tools:
   - wall_append
   - wall_read
