@@ -127,6 +127,7 @@ class TestJudgeBatching:
         llm = self.ScriptedLlm([[True, False], [True]])
         plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
         monkeypatch.setenv("GONEBY_JUDGE_BATCH", "2")
+        monkeypatch.setenv("GONEBY_JUDGE_CONCURRENCY", "1")
         self._append(ctx, "s1", ["kept one", "dead end", "kept two"])
         import json as _json
         result = _json.loads(
@@ -151,6 +152,7 @@ class TestJudgeBatching:
         llm = BoomThenOk()
         plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
         monkeypatch.setenv("GONEBY_JUDGE_BATCH", "1")
+        monkeypatch.setenv("GONEBY_JUDGE_CONCURRENCY", "1")
         self._append(ctx, "s1", ["boom batch", "judged batch"])
         import json as _json
         result = _json.loads(

@@ -765,6 +765,7 @@ class GoneByPlugin:
         """
         batch_size = max(1, _int_env("GONEBY_JUDGE_BATCH", 25))
         max_chars = max(200, _int_env("GONEBY_JUDGE_MAX_CHARS", 1200))
+        conc = max(1, _int_env("GONEBY_JUDGE_CONCURRENCY", 4))
         instructions = (
             "You are a relevance judge for a project memory system. Given the "
             "shipped product, decide which project log entries contributed to it. "
@@ -773,11 +774,29 @@ class GoneByPlugin:
             "a random thought, or was superseded. Respond with exactly one boolean "
             "per entry, in order — the array length must equal the entry count."
         )
-        flags: list[bool] = []
-        for start in range(0, len(entries), batch_size):
-            batch = entries[start : start + batch_size]
-            flags.extend(self._judge_batch(instructions, mvp_text, batch, max_chars))
-        return flags
+        batches = [
+            entries[start : start + batch_size]
+            for start in range(0, len(entries), batch_size)
+        ]
+
+        def judge_one(idx_batch):
+            idx, batch = idx_batch
+            return idx, self._judge_batch(instructions, mvp_text, batch, max_chars)
+
+        flags_by_index: dict[int, list[bool]] = {}
+        if conc == 1 or len(batches) <= 1:
+            for idx, batch in enumerate(batches):
+                flags_by_index[idx] = self._judge_batch(
+                    instructions, mvp_text, batch, max_chars
+                )
+        else:
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as pool:
+                for idx, flags in pool.map(judge_one, enumerate(batches)):
+                    flags_by_index[idx] = flags
+
+        return [f for idx in sorted(flags_by_index) for f in flags_by_index[idx]]
 
     def _judge_batch(
         self, instructions: str, mvp_text: str, batch: list, max_chars: int
