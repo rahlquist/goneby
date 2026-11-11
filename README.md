@@ -9,6 +9,8 @@ product — for semantic search in later sessions.
 Valkey, keys, smoke test): [`docs/SETUP.md`](docs/SETUP.md).**
 **→ Full documentation of the mechanism, benefits, and every user option:
 [`docs/OVERVIEW.md`](docs/OVERVIEW.md).**
+**→ How the idea came to be — the September session, the inversion, and why
+it runs alongside your memory system: [`docs/IDEATION.md`](docs/IDEATION.md).**
 
 ## Watch
 
