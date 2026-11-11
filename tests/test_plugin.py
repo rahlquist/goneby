@@ -81,6 +81,29 @@ def make_plugin(monkeypatch, tmp_path, ctx=None, **env) -> tuple:
 # --------------------------------------------------------------------------
 
 
+class TestJudgeHostContract:
+    """The host's complete_structured takes typed blocks, not raw strings.
+
+    The fake LLM in older tests accepted anything, which hid a ValueError
+    ('Unsupported input block: str') on every real walk_backward. Pin the
+    exact shape agent/plugin_llm.py requires.
+    """
+
+    def test_judge_passes_text_blocks(self, monkeypatch, tmp_path):
+        llm = FakeLlm(parsed=[True])
+        plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
+        handler = ctx.tools["wall_append"]["handler"]
+        handler({"content": "decided: use WAL", "entry_type": "decision"}, session_id="s1")
+        plugin._tool_walk_backward({"mvp_text": "shipped thing"}, session_id="s1")
+        assert llm.calls, "host LLM was never consulted"
+        blocks = llm.calls[-1]["input"]
+        assert isinstance(blocks, list) and len(blocks) == 1
+        assert isinstance(blocks[0], dict)
+        assert blocks[0]["type"] == "text"
+        assert isinstance(blocks[0]["text"], str) and "decided: use WAL" in blocks[0]["text"]
+        assert "shipped thing" in blocks[0]["text"]
+
+
 class TestRegistration:
     def test_registers_declared_tools(self, monkeypatch, tmp_path):
         _, ctx = make_plugin(monkeypatch, tmp_path)

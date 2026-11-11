@@ -761,7 +761,9 @@ class GoneByPlugin:
 
         result = self._ctx.llm.complete_structured(
             instructions=instructions,
-            input=[input_text],
+            # Host contract (agent/plugin_llm.py): input items must be typed
+            # blocks, not raw strings — a str raises ValueError there.
+            input=[{"type": "text", "text": input_text}],
             json_schema={"type": "array", "items": {"type": "boolean"}},
             purpose="goneby backward walk",
         )
