@@ -26,9 +26,9 @@ class TestProjectSlug:
         assert project_slug("goneby") == "goneby"
 
     def test_path_flattened(self):
-        slug = project_slug("/home/rahlquist/goneby")
+        slug = project_slug("/home/user/projects/goneby")
         assert "/" not in slug
-        assert slug == "home_rahlquist_goneby"
+        assert slug == "home_user_projects_goneby"
 
     def test_dots_and_dashes_kept(self):
         assert project_slug("my-project.v2") == "my-project.v2"

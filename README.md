@@ -236,17 +236,55 @@ quality. Verify ranking against a real model before trusting it.
 normalization, round trips) against a **fake** vector server on :8081 —
 it validates transport, not ranking quality.
 
-## Live Deployment (this host, 2026-11-10)
+## Deployment guidance
 
-| Piece | Where |
-|---|---|
-| Embedder | `llama-server` b12261 (CPU) at `~/.local/opt/llama.cpp/`, serving `~/models/Qwen3-Embedding-0.6B-Q8_0.gguf` on `127.0.0.1:8091` |
-| Services | systemd **user** units `goneby-embedder` and `goneby-valkey` (valkey on `127.0.0.1:6379`, data in `~/.goneby/valkey`) |
-| Config | `GONEBY_ENCRYPTION_KEY` and `GONEBY_EMBEDDING_BASE_URL` live in `~/.hermes/.env` (mode 600); the key is recorded nowhere else |
-| Verified | real-model ranking: related/unrelated cosine 0.67/0.25; top hit 0.79; project-scoped search isolation proven; WAL ciphertext-at-rest proven; `goneby status` reports embedder UP |
+GoneBy has three moving parts: the **embedding server**, the **vector
+backend**, and (for Hermes users) the **plugin**. Run the first two as
+long-lived local services however your machine supervises services — a
+systemd user unit, docker compose, launchd, or plain `nohup` all work.
+Example systemd user unit for a llama.cpp embedder:
 
-Manage with `systemctl --user {status,restart} goneby-embedder goneby-valkey`.
-Logs: `journalctl --user -u goneby-embedder`.
+```ini
+# ~/.config/systemd/user/goneby-embedder.service
+[Unit]
+Description=GoneBy embedding server
+[Service]
+ExecStart=%h/llama.cpp/llama-server -m %h/models/qwen3-embedding.gguf \
+  --embedding --host 127.0.0.1 --port 8081 -c 4096
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
+Guidelines that matter more than the exact paths:
+
+- **Bind everything to `127.0.0.1`.** The embedder and valkey are local
+  services; valkey additionally runs with `--protected-mode yes`.
+- **Point Hermes at the config** via `GONEBY_*` variables in
+  `~/.hermes/.env` (Hermes' own env file, mode 600), including
+  `GONEBY_ENCRYPTION_KEY` — generated with `goneby generate-key` and
+  recorded nowhere else. Losing it means losing every WAL.
+- **CPU is sufficient** for the recommended 0.6B embedding model.
+- `goneby status` probes the whole chain (config + live embedder) — make it
+  part of any health check.
+
+### Plugin path source (Hermes)
+
+`plugin/pyproject.toml` declares `goneby` as a `tool.uv.sources` **path**
+dependency, because it is not on PyPI yet. Hermes' admission resolver
+(`uv lock`) needs that declaration, and it must be an **absolute path to
+your checkout** — e.g. `<your-checkout>/goneby`. Set it once after cloning;
+`hermes plugins enable goneby` then installs and enables cleanly.
+
+### Verified reference deployment
+
+A full local deployment (llama.cpp + Qwen3-Embedding-0.6B Q8_0 + valkey,
+plugin enabled on a live gateway) was verified end-to-end on 2026-11-10:
+real-model ranking margin related/unrelated cosine 0.67/0.25, correct top
+hit, project-scoped isolation proven against the store, WAL ciphertext at
+rest. The unit suite uses a fake embedder and validates plumbing, not
+ranking — always sanity-check ranking with `goneby status` plus a real
+query when you stand a new machine up.
 
 ## License
 

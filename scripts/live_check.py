@@ -1,11 +1,12 @@
 """Throwaway live check: real llama-server-style endpoint on :8081."""
 import asyncio
 import sys
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
-sys.path.insert(0, "/home/rahlquist/goneby/tests")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from test_memory import fake_vector
 
 from goneby.memory.embedder import Embedder, EmbeddingConfig

@@ -85,28 +85,28 @@
 
         <!-- Context Compaction 1 -->
         <rect x="230" y="60" width="100" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
-        <text x="280" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Compaction 1</text>
-        <text x="280" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">Context Full</text>
+        <text x="280" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Turn 1</text>
+        <text x="280" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">pre_llm_call</text>
 
         <!-- Context Compaction 2 -->
         <rect x="360" y="60" width="100" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
-        <text x="410" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Compaction 2</text>
-        <text x="410" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">Context Full</text>
+        <text x="410" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Turn 2</text>
+        <text x="410" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">pre_llm_call</text>
 
         <!-- Context Compaction 3 -->
         <rect x="490" y="60" width="100" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
-        <text x="540" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Compaction 3</text>
-        <text x="540" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">Context Full</text>
+        <text x="540" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Turn 3</text>
+        <text x="540" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">pre_llm_call</text>
 
         <!-- Context Compaction N -->
         <rect x="620" y="60" width="100" height="50" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
-        <text x="670" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Compaction N</text>
-        <text x="670" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">Context Full</text>
+        <text x="670" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">Turn N</text>
+        <text x="670" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">pre_llm_call</text>
 
         <!-- wall_append tool -->
         <rect x="770" y="60" width="120" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
-        <text x="830" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">wall_append()</text>
-        <text x="830" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">MCP Tool Call</text>
+        <text x="830" y="80" fill="white" font-size="10" font-weight="600" text-anchor="middle">auto-capture</text>
+        <text x="830" y="95" fill="#94a3b8" font-size="8" text-anchor="middle">hook · wall_append()</text>
 
         <!-- WAL Writer -->
         <rect x="940" y="60" width="100" height="50" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
@@ -319,7 +319,7 @@
           <li>• Zero token cost — disk I/O only</li>
           <li>• ChaCha20-Poly1305 per-entry encryption</li>
           <li>• Append-only WAL, no filtering</li>
-          <li>• Called at each context compaction</li>
+          <li>• Auto-captured every turn (pre_llm_call)</li>
         </ul>
       </div>
 

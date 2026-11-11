@@ -23,7 +23,7 @@ def project_slug(project: str) -> str:
     """Filesystem-safe project identifier.
 
     Absolute paths and dotted names are flattened rather than rejected, so a
-    cwd like ``/home/rahlquist/goneby`` becomes a stable slug instead of an
+    cwd like ``/home/user/projects/goneby`` becomes a stable slug instead of an
     error.
     """
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", project.strip()).strip("._")
