@@ -5,6 +5,8 @@ output every turn into an encrypted write-ahead log, then retroactively
 filters and stores what actually mattered — judged backward from the shipped
 product — for semantic search in later sessions.
 
+**→ Setting up the full stack from zero (llama.cpp, the embedding model,
+Valkey, keys, smoke test): [`docs/SETUP.md`](docs/SETUP.md).**
 **→ Full documentation of the mechanism, benefits, and every user option:
 [`docs/OVERVIEW.md`](docs/OVERVIEW.md).**
 
@@ -36,12 +38,16 @@ GoneBy talks to any server exposing `POST /v1/embeddings`. Recommended: **Qwen3-
 ```bash
 # Start the embedding server (CPU is fine for this model size)
 llama-server \
-  -m qwen3-embedding-0.6b.gguf \
-  --embeddings \
-  --pooling cls \
+  -m ~/models/Qwen3-Embedding-0.6B-Q8_0.gguf \
+  --embedding \
+  --host 127.0.0.1 \
   --port 8081 \
-  --ctx-size 8192
+  -c 4096
 ```
+
+No `--pooling` flag is needed — the pooling type ships in the GGUF metadata.
+Get llama.cpp and the model from the URLs in
+[`docs/SETUP.md`](docs/SETUP.md) §3.
 
 Verify:
 
