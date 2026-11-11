@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from goneby import __version__
 from goneby.config import policy
 from goneby.config.settings import GoneByConfig, project_wal_path
 from goneby.crypto.cipher import Cipher
@@ -96,7 +97,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print("GoneBy Status")
     print("=" * 46)
-    print("Version:     0.1.0")
+    print(f"Version:     {__version__}")
     print(f"Project:     {config.project}")
     print(f"WAL base:    {config.wal_path}")
     print(f"Project WAL: {project_wal_path(config.wal_path, config.project)}")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from goneby import __version__
 from goneby.config.settings import GoneByConfig, project_wal_path
 from goneby.crypto.cipher import Cipher
 from goneby.memory.embedder import Embedder, EmbeddingConfig, EmbeddingError
@@ -270,7 +271,7 @@ def create_mcp_server(config: GoneByConfig | None = None):
         embedding and vector backends.
         """
         return {
-            "version": "0.1.0",
+            "version": __version__,
             "project": config.project,
             "wal_path": str(project_wal_path(config.wal_path, config.project)),
             "wal_entry_count": wal.entry_count,
