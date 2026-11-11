@@ -1,10 +1,19 @@
 # GoneBy — Retroactive Project Memory for LLM Agents
 
-GoneBy is an MCP server that captures LLM project output between context compactions, then retroactively filters and stores relevant memories using the shipped product as ground truth.
+GoneBy is a library, MCP server, and Hermes plugin that captures LLM project
+output every turn into an encrypted write-ahead log, then retroactively
+filters and stores what actually mattered — judged backward from the shipped
+product — for semantic search in later sessions.
+
+**→ Full documentation of the mechanism, benefits, and every user option:
+[`docs/OVERVIEW.md`](docs/OVERVIEW.md).**
 
 ## How It Works
 
-1. **Capture (WAL):** During a project, append output to an encrypted Write-Ahead Log at each context compaction boundary. No filtering, no LLM calls — just append.
+1. **Capture (WAL):** Every turn is appended to an encrypted per-project
+   Write-Ahead Log at `pre_llm_call` boundaries — before the host compacts
+   the transcript, so nothing is lost to the rewrite. No filtering, no LLM
+   calls — just append.
 2. **Filter (Backward Walk):** At project close, walk backward through the WAL using the shipped product as the oracle to determine which entries were actually relevant.
 3. **Store (Embed + Vector DB):** Embed the surviving entries and upsert them into Valkey (default) or Qdrant.
 4. **Retrieve:** Future sessions query the store semantically.

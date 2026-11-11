@@ -314,7 +314,8 @@ class GoneByPlugin:
             schema=self._schema(
                 "wall_append",
                 "Append an entry to this project's encrypted Write-Ahead Log. "
-                "Call at context compaction boundaries to capture project output. "
+                "Call at compaction boundaries or whenever a turn produced "
+                "project output worth keeping. "
                 "No filtering happens here — everything is stored; the backward "
                 "walk decides relevance later.",
                 {
