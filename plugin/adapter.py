@@ -24,11 +24,21 @@ dedicated background loop.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import os
 import threading
 from typing import Any
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read an int env var, tolerating garbage by falling back to default."""
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
 
 logger = logging.getLogger(__name__)
 
@@ -716,13 +726,17 @@ class GoneByPlugin:
                     {"status": "empty", "kept_count": 0, "kept_entries": []}
                 )
 
-            flags = self._judge(mvp_text, entries)
             from goneby.walk.backward import BackwardWalker
 
             async def judge(_mvp, batch):
-                return flags
+                # The walker passes entries newest-first and pairs our flags with
+                # that exact list — judge what we are given, never a precomputed
+                # chronological copy (that misaligned keep/discard silently).
+                return await asyncio.to_thread(self._judge, _mvp, batch)
 
-            result = self._run_async(BackwardWalker(judge).walk(mvp_text, entries))
+            result = self._run_async(
+                BackwardWalker(judge).walk(mvp_text, entries), timeout=900.0
+            )
 
             return json.dumps(
                 {
@@ -743,54 +757,76 @@ class GoneByPlugin:
         """Ask the host's model which entries contributed to the shipped product.
 
         Uses ``ctx.llm.complete_structured`` so the user's own model and auth are
-        borrowed — no separate API key, no hardcoded provider.
+        borrowed — no separate API key, no hardcoded provider. The log is judged
+        in batches (``GONEBY_JUDGE_BATCH`` entries per call, content capped at
+        ``GONEBY_JUDGE_MAX_CHARS``): one prompt for an entire WAL blows the host
+        request timeout on any real project. Each batch fails open independently,
+        so one unusable answer keeps that batch instead of destroying the walk.
         """
-
-        entries_text = "\n\n".join(
-            f"--- Entry {i} ---\n{e.get('content', '')}" for i, e in enumerate(entries)
-        )
+        batch_size = max(1, _int_env("GONEBY_JUDGE_BATCH", 25))
+        max_chars = max(200, _int_env("GONEBY_JUDGE_MAX_CHARS", 1200))
         instructions = (
             "You are a relevance judge for a project memory system. Given the "
             "shipped product, decide which project log entries contributed to it. "
             "An entry is relevant if it records a decision, finding, or constraint "
             "that shaped the final product. It is irrelevant if it was a dead end, "
-            "a random thought, or was superseded. Respond with one boolean per "
-            "entry, in order."
+            "a random thought, or was superseded. Respond with exactly one boolean "
+            "per entry, in order — the array length must equal the entry count."
         )
-        input_text = f"## Shipped product\n\n{mvp_text}\n\n## Log entries\n\n{entries_text}"
+        flags: list[bool] = []
+        for start in range(0, len(entries), batch_size):
+            batch = entries[start : start + batch_size]
+            flags.extend(self._judge_batch(instructions, mvp_text, batch, max_chars))
+        return flags
 
-        result = self._ctx.llm.complete_structured(
-            instructions=instructions,
-            # Host contract (agent/plugin_llm.py): input items must be typed
-            # blocks, not raw strings — a str raises ValueError there.
-            input=[{"type": "text", "text": input_text}],
-            json_schema={"type": "array", "items": {"type": "boolean"}},
-            purpose="goneby backward walk",
+    def _judge_batch(
+        self, instructions: str, mvp_text: str, batch: list, max_chars: int
+    ) -> list[bool]:
+        entries_text = "\n\n".join(
+            f"--- Entry {i} ---\n{e.get('content', '')[:max_chars]}"
+            for i, e in enumerate(batch)
         )
+        input_text = (
+            f"## Shipped product\n\n{mvp_text}\n\n"
+            f"## Log entries\n\n{entries_text}"
+        )
+        try:
+            result = self._ctx.llm.complete_structured(
+                instructions=instructions,
+                # Host contract (agent/plugin_llm.py): input items must be typed
+                # blocks, not raw strings — a str raises ValueError there.
+                input=[{"type": "text", "text": input_text}],
+                json_schema={"type": "array", "items": {"type": "boolean"}},
+                purpose="goneby backward walk",
+                timeout=120.0,
+            )
+        except Exception as exc:  # noqa: BLE001 — fail open per batch
+            logger.warning("goneby: judge batch failed (%s); keeping batch", exc)
+            return [True] * len(batch)
 
         parsed = getattr(result, "parsed", None)
         if isinstance(parsed, list):
             flags = [bool(x) for x in parsed]
-            if len(flags) < len(entries):
-                flags.extend([False] * (len(entries) - len(flags)))
-            return flags[: len(entries)]
+            if len(flags) < len(batch):
+                flags.extend([False] * (len(batch) - len(flags)))
+            return flags[: len(batch)]
 
         # Fall back to parsing the raw text if structured parsing was unavailable.
-        raw = getattr(result, "text", None) or ""
         import re
 
+        raw = getattr(result, "text", None) or ""
         match = re.search(r"\[[\s,true|false]*\]", raw)
         if match:
             try:
                 flags = json.loads(match.group())
-                if len(flags) < len(entries):
-                    flags.extend([False] * (len(entries) - len(flags)))
-                return flags[: len(entries)]
+                if len(flags) < len(batch):
+                    flags.extend([False] * (len(batch) - len(flags)))
+                return flags[: len(batch)]
             except json.JSONDecodeError:
                 pass
 
-        logger.warning("goneby: judge returned unusable output; keeping all entries")
-        return [True] * len(entries)
+        logger.warning("goneby: judge batch returned unusable output; keeping batch")
+        return [True] * len(batch)
 
     def _tool_store_memory(self, params: dict, **kwargs) -> str:
         not_ready = self._require_ready()

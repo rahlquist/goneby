@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,13 +40,16 @@ class BackwardWalker:
 
     def __init__(
         self,
-        judge_fn: Callable[[str, list[dict[str, Any]]], list[bool]],
+        judge_fn: Callable[
+            [str, list[dict[str, Any]]], Awaitable[list[bool]]
+        ],
     ):
         """Initialize the backward walker.
 
         Args:
-            judge_fn: Callable that takes (mvp_text, entries) and returns
-                      a list of booleans indicating which entries are relevant.
+            judge_fn: Awaitable callable that takes (mvp_text, entries) —
+                      entries newest-first — and returns one boolean per entry,
+                      in that same order, marking which entries are relevant.
         """
         self._judge_fn = judge_fn
 

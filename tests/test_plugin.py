@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -37,7 +38,7 @@ class FakeLlm:
 
 
 class FakeCtx:
-    def __init__(self, llm: FakeLlm | None = None):
+    def __init__(self, llm: Any | None = None):
         self.tools: dict[str, dict] = {}
         self.hooks: dict[str, object] = {}
         self.llm = llm or FakeLlm()
@@ -102,6 +103,77 @@ class TestJudgeHostContract:
         assert blocks[0]["type"] == "text"
         assert isinstance(blocks[0]["text"], str) and "decided: use WAL" in blocks[0]["text"]
         assert "shipped thing" in blocks[0]["text"]
+
+
+class TestJudgeBatching:
+    """Large WALs must be judged in bounded batches, fail-open per batch."""
+
+    class ScriptedLlm:
+        def __init__(self, seq):
+            self.seq = list(seq)
+            self.calls = []
+
+        def complete_structured(self, **kwargs):
+            self.calls.append(kwargs)
+            return FakeLlmResult(parsed=self.seq.pop(0))
+
+    @staticmethod
+    def _append(ctx, session_id, contents):
+        handler = ctx.tools["wall_append"]["handler"]
+        for c in contents:
+            handler({"content": c, "entry_type": "note"}, session_id=session_id)
+
+    def test_multiple_batches_align(self, monkeypatch, tmp_path):
+        llm = self.ScriptedLlm([[True, False], [True]])
+        plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
+        monkeypatch.setenv("GONEBY_JUDGE_BATCH", "2")
+        self._append(ctx, "s1", ["kept one", "dead end", "kept two"])
+        import json as _json
+        result = _json.loads(
+            plugin._tool_walk_backward({"mvp_text": "shipped"}, session_id="s1")
+        )
+        assert result["status"] == "ok"
+        assert len(llm.calls) == 2, "3 entries at batch=2 must make two judge calls"
+        assert result["kept_count"] == 2
+        assert result["discarded_count"] == 1
+
+    def test_batch_failure_keeps_only_that_batch(self, monkeypatch, tmp_path):
+        class BoomThenOk:
+            def __init__(self):
+                self.n = 0
+
+            def complete_structured(self, **kwargs):
+                self.n += 1
+                if self.n == 1:
+                    raise RuntimeError("APITimeoutError: Request timed out.")
+                return FakeLlmResult(parsed=[False])
+
+        llm = BoomThenOk()
+        plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
+        monkeypatch.setenv("GONEBY_JUDGE_BATCH", "1")
+        self._append(ctx, "s1", ["boom batch", "judged batch"])
+        import json as _json
+        result = _json.loads(
+            plugin._tool_walk_backward({"mvp_text": "shipped"}, session_id="s1")
+        )
+        assert result["status"] == "ok"
+        assert result["kept_count"] == 1
+        # Batches arrive newest-first (walker pairs flags with that order):
+        # batch 1 = "judged batch" raises -> fail-open KEEP; batch 2 = "boom
+        # batch" answers False -> discarded.
+        kept_texts = [e["content"] for e in result["kept_entries"]]
+        assert kept_texts == ["judged batch"]
+
+    def test_garbage_env_falls_back_to_default(self, monkeypatch, tmp_path):
+        llm = FakeLlm(parsed=[True])
+        plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
+        monkeypatch.setenv("GONEBY_JUDGE_BATCH", "not-a-number")
+        self._append(ctx, "s1", ["only entry"])
+        import json as _json
+        result = _json.loads(
+            plugin._tool_walk_backward({"mvp_text": "shipped"}, session_id="s1")
+        )
+        assert result["status"] == "ok"
 
 
 class TestRegistration:
