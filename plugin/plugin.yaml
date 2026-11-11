@@ -9,6 +9,7 @@ provides_tools:
   - store_memory
   - query_memory
   - goneby_status
+  - goneby_project
 provides_hooks:
   - pre_llm_call
   - post_compaction

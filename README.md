@@ -155,6 +155,31 @@ The same six tools the MCP server exposes, registered as first-class Hermes tool
 - A wrong key or damaged line yields a `CORRUPTED` marker rather than aborting the read or leaking plaintext.
 - **Losing the key means losing the WAL.** Store it in Bitwarden or the Hermes vault, not in the repo.
 
+## Capture policy
+
+Capture is **on for everything by default** (`mode=all`), with four controls —
+most specific wins:
+
+| Control | Scope | Set via |
+|---|---|---|
+| **master gate** | everywhere, persisted | `/goneby gate on\|off`, `goneby gate on\|off`, `~/.goneby/config.json` |
+| **platform kill** | one gateway (`telegram`, `discord`, `cli`, `desktop`...) | `/goneby platform telegram off`, `goneby platform disable telegram`, `GONEBY_DISABLED_PLATFORMS=telegram,discord` (env is additive, not persisted) |
+| **project marker** | one repo — `.goneby.json` at the project root, team-visible, travels with the repo | `/goneby enable [path]`, `/goneby disable [path]`, `goneby project enable PATH`, `goneby_project` tool |
+| **user override** | one project, personal — `~/.goneby/config.json` `projects` map (used when no marker exists or the repo isn't writable) | `goneby project enable --project SLUG`, `goneby_project` tool fallback |
+
+Switching the whole system to disable-by-default: `/goneby mode opt-in` or
+`goneby mode opt-in` — then only projects with an enabling marker/override
+capture. `mode all` (default) captures everything not excluded above.
+
+**Project identity**: the plugin resolves a session's project from Hermes'
+`state.db` (`sessions.git_repo_root`, falling back to `sessions.cwd`) — the
+repo directory name becomes the WAL slug, so per-project WALs are real, not
+aspirational. Sessions with no resolvable context fall back to
+`GONEBY_PROJECT`/`default`. `GONEBY_HERMES_STATE_DB` overrides the lookup path.
+
+Everything persists in `~/.goneby/config.json` (`GONEBY_CONFIG_PATH` to move
+it). `goneby_status` and `/goneby status` show the effective decision.
+
 ## Architecture
 
 ```

@@ -54,8 +54,8 @@ class FakeCtx:
     def register_hook(self, hook_name, callback, **kwargs):
         self.hooks[hook_name] = callback
 
-    def register_command(self, name, **kwargs):
-        self.commands[name] = kwargs
+    def register_command(self, name, handler=None, **kwargs):
+        self.commands[name] = handler
 
 
 def make_plugin(monkeypatch, tmp_path, ctx=None, **env) -> tuple:
@@ -63,6 +63,8 @@ def make_plugin(monkeypatch, tmp_path, ctx=None, **env) -> tuple:
     monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", Cipher.generate_key().hex())
     monkeypatch.setenv("GONEBY_WAL_PATH", str(tmp_path / "wal"))
     monkeypatch.setenv("GONEBY_PROJECT", env.get("GONEBY_PROJECT", "test-proj"))
+    monkeypatch.setenv("GONEBY_CONFIG_PATH", str(tmp_path / "goneby-config.json"))
+    monkeypatch.setenv("GONEBY_HERMES_STATE_DB", str(tmp_path / "absent-state.db"))
     for key, value in env.items():
         monkeypatch.setenv(key, str(value))
 
@@ -89,6 +91,7 @@ class TestRegistration:
             "store_memory",
             "query_memory",
             "goneby_status",
+            "goneby_project",
         }
 
     def test_registers_declared_hooks(self, monkeypatch, tmp_path):
@@ -127,6 +130,7 @@ class TestRegistration:
             "store_memory",
             "query_memory",
             "goneby_status",
+            "goneby_project",
         }
 
 
@@ -557,3 +561,135 @@ class TestMessageText:
         a = message_identity({"role": "user", "content": "same"})
         b = message_identity({"role": "assistant", "content": "same"})
         assert a != b  # role is part of the identity
+
+
+# --------------------------------------------------------------------------
+# Capture policy: opt-in mode, project resolution, /goneby control
+# --------------------------------------------------------------------------
+
+
+class TestCapturePolicy:
+    @staticmethod
+    def _history(*pairs):
+        return [{"role": r, "content": c, "message_uid": f"{r}-{c}"} for r, c in pairs]
+
+    @staticmethod
+    def _make_state_db(tmp_path, rows):
+        import sqlite3
+
+        db = tmp_path / "state.db"
+        con = sqlite3.connect(db)
+        con.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, git_repo_root TEXT)"
+        )
+        con.executemany("INSERT INTO sessions VALUES (?, ?, ?)", rows)
+        con.commit()
+        con.close()
+        return db
+
+    def _capture_hook(self, ctx, session_id="s1", platform="cli"):
+        ctx.hooks["pre_llm_call"](
+            session_id=session_id,
+            user_message="x",
+            conversation_history=self._history(("user", "policy probe")),
+            is_first_turn=True,
+            model="test",
+            platform=platform,
+        )
+
+    def test_opt_in_mode_captures_nothing_without_marker(self, monkeypatch, tmp_path):
+        plugin, ctx = make_plugin(monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="opt-in")
+        self._capture_hook(ctx)
+        assert not plugin._get_wal().read_all()
+        assert not plugin._wal_path.exists()
+
+    def test_enable_writes_marker_and_capture_flows(self, monkeypatch, tmp_path):
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        _plugin, ctx = make_plugin(monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="opt-in")
+
+        out = ctx.tools["goneby_project"]["handler"](
+            {"action": "enable", "path": str(repo)}, session_id="s1"
+        )
+        import json as _json
+
+        verdict = _json.loads(out)
+        assert verdict["status"] == "ok"
+        assert (repo / ".goneby.json").exists()
+        # marker at repo path, but session id is unknown => slug stays default project
+        assert verdict["written_to"].endswith(".goneby.json")
+
+    def test_project_slug_comes_from_state_db(self, monkeypatch, tmp_path):
+        repo = tmp_path / "realrepo"
+        repo.mkdir()
+        db = self._make_state_db(tmp_path, [("s1", str(repo), str(repo))])
+        plugin, ctx = make_plugin(
+            monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="all", GONEBY_HERMES_STATE_DB=db
+        )
+        self._capture_hook(ctx)
+        wal = plugin._get_wal("realrepo")
+        entries = wal.read_all()
+        assert entries and entries[0]["content"] == "policy probe"
+        assert not plugin._get_wal().read_all()  # default project untouched
+
+    def test_opt_in_marker_enables_named_project(self, monkeypatch, tmp_path):
+        repo = tmp_path / "optrepo"
+        repo.mkdir()
+        (repo / ".goneby.json").write_text('{"tool": "goneby", "enabled": true}')
+        db = self._make_state_db(tmp_path, [("s1", str(repo), str(repo))])
+        plugin, ctx = make_plugin(
+            monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="opt-in", GONEBY_HERMES_STATE_DB=db
+        )
+        self._capture_hook(ctx)
+        assert plugin._get_wal("optrepo").read_all()
+
+    def test_marker_disable_beats_mode_all(self, monkeypatch, tmp_path):
+        repo = tmp_path / "quietrepo"
+        repo.mkdir()
+        (repo / ".goneby.json").write_text('{"enabled": false}')
+        db = self._make_state_db(tmp_path, [("s1", str(repo), str(repo))])
+        plugin, ctx = make_plugin(
+            monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="all", GONEBY_HERMES_STATE_DB=db
+        )
+        self._capture_hook(ctx)
+        assert not plugin._get_wal("quietrepo").read_all()
+
+    def test_platform_kill_gates_by_platform(self, monkeypatch, tmp_path):
+        plugin, ctx = make_plugin(monkeypatch, tmp_path)
+        run = ctx.commands["goneby"]
+        reply = run("platform telegram off", session_id="s1", platform="cli")
+        assert "DISABLED" in reply
+
+        # telegram session captures nothing
+        self._capture_hook(ctx, platform="telegram")
+        assert not plugin._get_wal().read_all()
+        # cli session still captures
+        self._capture_hook(ctx, platform="cli")
+        assert plugin._get_wal().read_all()
+
+    def test_gate_off_stops_everything(self, monkeypatch, tmp_path):
+        plugin, ctx = make_plugin(monkeypatch, tmp_path)
+        reply = ctx.commands["goneby"]("gate off", session_id="s1")
+        assert "OFF" in reply
+        self._capture_hook(ctx)
+        assert not plugin._get_wal().read_all()
+
+    def test_mode_switch_via_command(self, monkeypatch, tmp_path):
+        plugin, ctx = make_plugin(monkeypatch, tmp_path)
+        run = ctx.commands["goneby"]
+        assert "opt-in" in run("mode opt-in", session_id="s1")
+        self._capture_hook(ctx)
+        assert not plugin._get_wal().read_all()
+        assert "all" in run("mode all", session_id="s1")
+        self._capture_hook(ctx, platform="desktop")
+        assert plugin._get_wal().read_all()
+
+    def test_status_reports_policy(self, monkeypatch, tmp_path):
+        _plugin, ctx = make_plugin(monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="opt-in")
+        out = json.loads(ctx.tools["goneby_status"]["handler"]({}, session_id="s1"))
+        assert out["capture"]["policy"]["mode"] == "opt-in"
+        assert out["capture"]["allowed_for_this_session"] is False
+
+    def test_unknown_command_shows_usage(self, monkeypatch, tmp_path):
+        _plugin, ctx = make_plugin(monkeypatch, tmp_path)
+        assert "usage" in ctx.commands["goneby"]("frobnicate", session_id="s1")

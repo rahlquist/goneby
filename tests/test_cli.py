@@ -63,3 +63,56 @@ def test_config_errors_reported_not_raised(monkeypatch, tmp_path, capsys):
     rc = run_cli(monkeypatch, ["append", "nope"])
     assert rc == 1
     assert "Configuration errors" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Policy commands: project / mode / platform / gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def policy_env(monkeypatch, tmp_path):
+    cfg_path = tmp_path / "cfg.json"
+    monkeypatch.setenv("GONEBY_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setenv("GONEBY_PROJECT", "pol-proj")
+    return cfg_path
+
+
+def test_mode_command_persists(policy_env, monkeypatch, capsys):
+    assert run_cli(monkeypatch, ["mode", "opt-in"]) == 0
+    assert "opt-in" in capsys.readouterr().out
+    from goneby.config import policy
+
+    assert policy.load_config(policy_env)["mode"] == "opt-in"
+
+
+def test_project_enable_writes_marker(policy_env, monkeypatch, capsys):
+    repo = policy_env.parent / "somerepo"
+    repo.mkdir()
+    assert run_cli(monkeypatch, ["project", "enable", str(repo)]) == 0
+    assert (repo / ".goneby.json").exists()
+
+    assert run_cli(monkeypatch, ["project", "status", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "Marker:    True" in out
+    assert "Capturing: True" in out
+
+
+def test_project_enable_without_path_uses_override(policy_env, monkeypatch):
+    assert run_cli(monkeypatch, ["project", "enable"]) == 0
+    from goneby.config import policy
+
+    assert policy.project_override(policy.load_config(policy_env), "pol-proj") is True
+
+
+def test_platform_and_gate_commands(policy_env, monkeypatch, capsys):
+    assert run_cli(monkeypatch, ["platform", "disable", "telegram"]) == 0
+    assert run_cli(monkeypatch, ["platform", "list"]) == 0
+    assert "telegram" in capsys.readouterr().out
+
+    assert run_cli(monkeypatch, ["gate", "off"]) == 0
+    from goneby.config import policy
+
+    assert policy.load_config(policy_env)["master_enabled"] is False
+
+    assert run_cli(monkeypatch, ["platform", "enable"]) == 1  # missing id

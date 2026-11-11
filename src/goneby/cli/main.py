@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from goneby.config import policy
 from goneby.config.settings import GoneByConfig, project_wal_path
 from goneby.crypto.cipher import Cipher
 from goneby.wal.manager import WALManager
@@ -151,6 +152,88 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return serve_main()
 
 
+def cmd_project(args: argparse.Namespace) -> int:
+    """Enable/disable/inspect capture for one project."""
+    from pathlib import Path
+
+    cfg = GoneByConfig.from_env()
+    slug = args.project or cfg.project
+    root = Path(args.path).expanduser() if args.path else None
+
+    if args.action in ("enable", "disable"):
+        enabled = args.action == "enable"
+        written = None
+        if root is not None and root.is_dir():
+            try:
+                written = f"marker: {policy.write_marker(root, enabled)}"
+            except OSError:
+                written = None
+        if written is None:
+            user_cfg = policy.load_config()
+            policy.set_project_override(user_cfg, slug, enabled)
+            written = f"user config: projects[{slug}]"
+        print(f"Capture {args.action}d for project '{slug}' -> {written}")
+        return 0
+
+    # status
+    user_cfg = policy.load_config()
+    marker = policy.read_marker(root)
+    override = policy.project_override(user_cfg, slug)
+    mode = policy.effective_mode(user_cfg)
+    verdict = policy.capture_allowed(
+        slug,
+        "",
+        mode=mode,
+        disabled_platforms=policy.effective_disabled_platforms(user_cfg),
+        master=policy.master_enabled(user_cfg),
+        marker=marker,
+        override=override,
+    )
+    print(f"Project:   {slug}")
+    print(f"Root:      {root if root else '(cwd-derived at capture time)'}")
+    print(f"Marker:    {marker if marker is not None else 'none'}")
+    print(f"Override:  {override if override is not None else 'none'}")
+    print(f"Mode:      {mode}")
+    print(f"Capturing: {verdict}")
+    return 0
+
+
+def cmd_mode(args: argparse.Namespace) -> int:
+    cfg = policy.load_config()
+    cfg["mode"] = args.mode
+    policy.save_config(cfg)
+    detail = (
+        "capture everything not excluded by gate/platform/marker/override"
+        if args.mode == policy.MODE_ALL
+        else "capture only explicitly enabled projects"
+    )
+    print(f"Capture mode set to '{args.mode}' ({detail}).")
+    return 0
+
+
+def cmd_platform(args: argparse.Namespace) -> int:
+    if args.action == "list":
+        disabled = sorted(policy.effective_disabled_platforms(policy.load_config()))
+        print("Disabled platforms: " + (", ".join(disabled) if disabled else "(none)"))
+        return 0
+    if not args.name:
+        print(f"Configuration errors:\n  - platform {args.action} requires a platform id")
+        return 1
+    cfg = policy.load_config()
+    cfg = policy.set_platform(args.name, args.action == "enable")
+    disabled = sorted(cfg.get("disabled_platforms", []))
+    print(f"Platform '{args.name}' capture {args.action}d. Disabled list: {', '.join(disabled) or '(none)'}")
+    return 0
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    enabled = args.state == "on"
+    policy.set_master_enabled(enabled)
+    print(f"Master capture gate {args.state}: capture is now "
+          f"{'possible everywhere not excluded' if enabled else 'OFF for every project and gateway'}.")
+    return 0
+
+
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -177,6 +260,35 @@ def main() -> int:
     # status
     status_parser = subparsers.add_parser("status", help="Show GoneBy status")
     status_parser.set_defaults(func=cmd_status)
+
+    # project
+    project_parser = subparsers.add_parser(
+        "project", help="Enable/disable/inspect capture for a project"
+    )
+    project_parser.add_argument(
+        "action", choices=["enable", "disable", "status"], help="What to do"
+    )
+    project_parser.add_argument("path", nargs="?", default="", help="Project root path")
+    project_parser.add_argument("--project", default="", help="Project slug (override target)")
+    project_parser.set_defaults(func=cmd_project)
+
+    # mode
+    mode_parser = subparsers.add_parser("mode", help="Set capture mode: all | opt-in")
+    mode_parser.add_argument("mode", choices=list(policy.MODES), help="Capture mode")
+    mode_parser.set_defaults(func=cmd_mode)
+
+    # platform
+    platform_parser = subparsers.add_parser(
+        "platform", help="Per-gateway capture kill (e.g. telegram)"
+    )
+    platform_parser.add_argument("action", choices=["enable", "disable", "list"])
+    platform_parser.add_argument("name", nargs="?", default="", help="Platform id")
+    platform_parser.set_defaults(func=cmd_platform)
+
+    # gate
+    gate_parser = subparsers.add_parser("gate", help="Master capture switch")
+    gate_parser.add_argument("state", choices=["on", "off"], help="Capture everywhere or nowhere")
+    gate_parser.set_defaults(func=cmd_gate)
 
     # serve
     serve_parser = subparsers.add_parser("serve", help="Run MCP server")

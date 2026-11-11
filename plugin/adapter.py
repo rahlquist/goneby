@@ -97,6 +97,22 @@ class GoneByPlugin:
         # Opt-in recall: a search on every turn costs latency.
         self.auto_recall = self._env_flag("GONEBY_AUTO_RECALL", default=False)
         self.auto_capture = self._env_flag("GONEBY_AUTO_CAPTURE", default=True)
+
+        # Capture policy: master switch, mode (all|opt-in), per-gateway kills,
+        # per-project marker (.goneby.json at the repo root) or user override
+        # in ~/.goneby/config.json. Session -> project resolution reads
+        # Hermes' state.db (cwd/git_repo_root) read-only.
+        from pathlib import Path as _Path
+
+        from goneby.config import policy as _policy
+
+        self._policy = _policy
+        self._config_path = _policy.default_config_path()
+        self._state_db = _Path(
+            self._env("GONEBY_HERMES_STATE_DB", "~/.hermes/state.db")
+        ).expanduser()
+        self._session_ctx_cache: dict[str, Any] = {}
+        self._stores: dict[str, Any] = {}
         # Skip recall for very short turns ("ok", "continue") — rarely a query.
         self.recall_min_chars = int(
             self._env("GONEBY_RECALL_MIN_CHARS", "12")
@@ -190,9 +206,12 @@ class GoneByPlugin:
     # Lazy components
     # ------------------------------------------------------------------
 
-    def _get_store(self):
-        if self._store is not None:
-            return self._store
+    def _get_store(self, project: str | None = None):
+        key = project or self._config.project
+        with self._lock:
+            cached = self._stores.get(key)
+        if cached is not None:
+            return cached
         from goneby.memory.embedder import Embedder, EmbeddingConfig
         from goneby.memory.store import MemoryStore
         from goneby.vector.factory import create_backend
@@ -206,15 +225,82 @@ class GoneByPlugin:
                 batch_size=self._config.embedding_batch_size,
             )
         )
-        self._store = MemoryStore(
-            embedder, create_backend(self._config), project=self._config.project
-        )
-        return self._store
+        store = MemoryStore(embedder, create_backend(self._config), project=key)
+        with self._lock:
+            self._stores[key] = store
+        return store
 
-    def _get_wal(self):
+    def _get_wal(self, project: str | None = None):
+        from goneby.config.settings import project_wal_path
         from goneby.wal.manager import WALManager
 
-        return WALManager(self._wal_path, self._cipher)
+        if not project or project == self._config.project:
+            return WALManager(self._wal_path, self._cipher)
+        return WALManager(project_wal_path(self._config.wal_path, project), self._cipher)
+
+    # ------------------------------------------------------------------
+    # Capture policy plumbing
+    # ------------------------------------------------------------------
+
+    def _policy_view(self) -> dict:
+        cfg = self._policy.load_config(self._config_path)
+        return {
+            "config": cfg,
+            "master": self._policy.master_enabled(cfg, self.auto_capture),
+            "mode": self._policy.effective_mode(cfg, self._env("GONEBY_CAPTURE_MODE")),
+            "disabled_platforms": self._policy.effective_disabled_platforms(
+                cfg, self._env("GONEBY_DISABLED_PLATFORMS")
+            ),
+        }
+
+    def _session_project(self, session_id: str | None) -> tuple[str, Any]:
+        """(slug, root) for a Hermes session, resolved from state.db (read-only).
+
+        Cached per session; falls back to the configured default project and
+        never raises — a lookup miss must not cost a turn.
+        """
+        if not session_id:
+            return self._config.project, None
+        with self._lock:
+            hit = self._session_ctx_cache.get(session_id)
+        if hit is not None:
+            return hit
+        slug, root = self._config.project, None
+        try:
+            import sqlite3
+
+            con = sqlite3.connect(f"file:{self._state_db}?mode=ro", uri=True, timeout=0.25)
+            try:
+                row = con.execute(
+                    "SELECT cwd, git_repo_root FROM sessions WHERE id = ?",
+                    (session_id,),
+                ).fetchone()
+            finally:
+                con.close()
+            if row:
+                slug, root = self._policy.resolve_project_slug(row[0] or "", row[1] or "")
+        except Exception as exc:  # noqa: BLE001 - resolution is best-effort
+            logger.debug("goneby: session project lookup failed — %s", exc)
+        with self._lock:
+            if len(self._session_ctx_cache) >= 256:
+                self._session_ctx_cache.clear()
+            self._session_ctx_cache[session_id] = (slug, root)
+        return slug, root
+
+    def _capture_verdict(self, context: dict) -> tuple[str, Any, bool]:
+        """(project, root, capture_allowed) for one hook/tool invocation."""
+        slug, root = self._session_project(context.get("session_id"))
+        view = self._policy_view()
+        allowed = self._policy.capture_allowed(
+            slug,
+            str(context.get("platform") or ""),
+            mode=view["mode"],
+            disabled_platforms=view["disabled_platforms"],
+            master=view["master"],
+            marker=self._policy.read_marker(root),
+            override=self._policy.project_override(view["config"], slug),
+        )
+        return slug, root, allowed
 
     # ------------------------------------------------------------------
     # Registration
@@ -334,6 +420,42 @@ class GoneByPlugin:
             is_async=False,
         )
 
+        ctx.register_tool(
+            name="goneby_project",
+            toolset="goneby",
+            schema=self._schema(
+                "goneby_project",
+                "Enable, disable, or inspect GoneBy capture for the current "
+                "project (or one given by an explicit path). Writes "
+                ".goneby.json at the project root when it exists, otherwise "
+                "falls back to a user-level override in ~/.goneby/config.json.",
+                {
+                    "action": {
+                        "type": "string",
+                        "enum": ["enable", "disable", "status"],
+                        "description": "What to do.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Project root path (optional; defaults "
+                        "to this session's repo/cwd).",
+                    },
+                },
+                required=["action"],
+            ),
+            handler=self._tool_project,
+            is_async=False,
+        )
+        ctx.register_command(
+            "goneby",
+            self._command_goneby,
+            description=(
+                "GoneBy capture control: status, enable/disable a project, "
+                "master gate, capture mode (all|opt-in), per-gateway platform kill."
+            ),
+            args_hint="[status|enable [path]|disable [path]|gate on|off|mode all|opt-in|platform <id> on|off]",
+        )
+
         ctx.register_hook("pre_llm_call", self._on_pre_llm_call)
         ctx.register_hook("post_compaction", self._on_post_compaction)
         logger.info(
@@ -358,7 +480,7 @@ class GoneByPlugin:
     # Capture
     # ------------------------------------------------------------------
 
-    def _capture(self, conversation_history: list) -> int:
+    def _capture(self, conversation_history: list, wal=None, project: str | None = None) -> int:
         """Append unseen messages to the WAL. Returns count appended.
 
         Pure synchronous file I/O — safe to call from a hook.
@@ -368,7 +490,7 @@ class GoneByPlugin:
 
         appended = 0
         try:
-            wal = self._get_wal()
+            wal = wal or self._get_wal(project)
             with self._lock:
                 for message in conversation_history:
                     if not isinstance(message, dict):
@@ -406,9 +528,13 @@ class GoneByPlugin:
         Never raises: a failing hook is logged and skipped by the host, but a
         raise here would also skip any later plugin's hook.
         """
+        project = self._config.project
         try:
-            if self.auto_capture:
-                self._capture(conversation_history or [])
+            project, _root, allowed = self._capture_verdict(
+                {"session_id": session_id, "platform": platform}
+            )
+            if allowed:
+                self._capture(conversation_history or [], self._get_wal(project), project)
         except Exception as exc:  # noqa: BLE001
             logger.warning("goneby: pre_llm_call capture error — %s", exc)
 
@@ -422,13 +548,13 @@ class GoneByPlugin:
             return None
 
         try:
-            return self._recall(query.strip())
+            return self._recall(query.strip(), project)
         except Exception as exc:  # noqa: BLE001 - recall must never break a turn
             logger.warning("goneby: recall failed — %s", exc)
             return None
 
-    def _recall(self, query: str) -> str | None:
-        store = self._get_store()
+    def _recall(self, query: str, project: str | None = None) -> str | None:
+        store = self._get_store(project)
         result = self._run_async(
             store.search(query, top_k=self.recall_top_k, scope="project")
         )
@@ -464,6 +590,11 @@ class GoneByPlugin:
         try:
             if not self.available:
                 return
+            project, _root, allowed = self._capture_verdict(
+                {"session_id": session_id, **kwargs}
+            )
+            if not allowed:
+                return
             # A compaction boundary is worth one line of context for the walk.
             self._capture(
                 [
@@ -475,7 +606,9 @@ class GoneByPlugin:
                         ),
                         "message_uid": f"compaction-{session_id}-{kind}-{reason}",
                     }
-                ]
+                ],
+                self._get_wal(project),
+                project,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("goneby: post_compaction error — %s", exc)
@@ -511,13 +644,14 @@ class GoneByPlugin:
             )
 
         try:
-            wal = self._get_wal()
+            project, _root, _allowed = self._capture_verdict(kwargs)
+            wal = self._get_wal(project)
             with self._lock:
                 wal.append(content, {"type": entry_type})
             return json.dumps(
                 {
                     "status": "ok",
-                    "project": self.project,
+                    "project": project,
                     "entry_type": entry_type,
                     "wal_entry_count": wal.entry_count,
                 }
@@ -530,9 +664,10 @@ class GoneByPlugin:
         if not_ready:
             return json.dumps(not_ready)
         try:
-            entries = self._get_wal().read_all()
+            project, _root, _allowed = self._capture_verdict(kwargs)
+            entries = self._get_wal(project).read_all()
             return json.dumps(
-                {"status": "ok", "project": self.project, "count": len(entries), "entries": entries}
+                {"status": "ok", "project": project, "count": len(entries), "entries": entries}
             )
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
@@ -547,7 +682,8 @@ class GoneByPlugin:
             return json.dumps({"status": "error", "error": "mvp_text must not be empty"})
 
         try:
-            entries = self._get_wal().read_all()
+            project, _root, _allowed = self._capture_verdict(kwargs)
+            entries = self._get_wal(project).read_all()
             if not entries:
                 return json.dumps(
                     {"status": "empty", "kept_count": 0, "kept_entries": []}
@@ -564,7 +700,7 @@ class GoneByPlugin:
             return json.dumps(
                 {
                     "status": "ok",
-                    "project": self.project,
+                    "project": project,
                     "kept_count": result.kept_count,
                     "discarded_count": result.discarded_count,
                     "total_count": result.total_count,
@@ -637,8 +773,9 @@ class GoneByPlugin:
             return json.dumps({"status": "error", "error": "entries must be a list"})
 
         try:
-            result = self._run_async(self._get_store().index_entries(entries))
-            result["project"] = self.project
+            project, _root, _allowed = self._capture_verdict(kwargs)
+            result = self._run_async(self._get_store(project).index_entries(entries))
+            result["project"] = project
             return json.dumps(result)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
@@ -654,8 +791,9 @@ class GoneByPlugin:
 
         scope = params.get("scope") or "project"
         try:
+            project, _root, _allowed = self._capture_verdict(kwargs)
             result = self._run_async(
-                self._get_store().search(
+                self._get_store(project).search(
                     query,
                     top_k=int(params.get("top_k") or 5),
                     min_score=float(params.get("min_score") or 0.0),
@@ -667,10 +805,13 @@ class GoneByPlugin:
             return json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
 
     def _tool_status(self, params: dict, **kwargs) -> str:
+        from goneby.config.settings import project_wal_path
+
+        project, root, allowed = self._capture_verdict(kwargs)
         payload = {
             "status": "ok" if self.available else "error",
-            "project": self.project,
-            "wal_path": str(self._wal_path),
+            "project": project,
+            "wal_path": str(project_wal_path(self._config.wal_path, project)),
             "wal_entry_count": 0,
             "vector_backend": self._config.vector_backend,
             "embedding": {
@@ -681,13 +822,22 @@ class GoneByPlugin:
             "encryption": "ChaCha20-Poly1305",
             "auto_capture": self.auto_capture,
             "auto_recall": self.auto_recall,
+            "capture": {
+                "allowed_for_this_session": allowed,
+                "project_root": str(root) if root else None,
+                "policy": {
+                    k: (sorted(v) if isinstance(v, frozenset) else v)
+                    for k, v in self._policy_view().items()
+                    if k != "config"
+                },
+            },
         }
         if self._init_error:
             payload["error"] = self._init_error
             return json.dumps(payload)
 
         try:
-            payload["wal_entry_count"] = self._get_wal().entry_count
+            payload["wal_entry_count"] = self._get_wal(project).entry_count
         except Exception as exc:  # noqa: BLE001
             payload["wal_error"] = str(exc)
 
@@ -698,3 +848,125 @@ class GoneByPlugin:
             payload["health"] = {"ok": False, "detail": str(exc)}
 
         return json.dumps(payload)
+
+    # ------------------------------------------------------------------
+    # Per-project / per-gateway capture control (tool + /goneby command)
+    # ------------------------------------------------------------------
+
+    def _project_control(self, action: str, path: str, context: dict) -> dict:
+        """Shared logic for the goneby_project tool and the /goneby command."""
+        from pathlib import Path
+
+        slug, root = self._session_project(context.get("session_id"))
+        if path:
+            root = Path(path).expanduser()
+        view = self._policy_view()
+
+        if action in ("enable", "disable"):
+            enabled = action == "enable"
+            written = None
+            if root is not None and Path(root).is_dir():
+                try:
+                    written = str(self._policy.write_marker(Path(root), enabled))
+                except OSError as exc:
+                    logger.debug("goneby: marker write failed — %s", exc)
+            if written is None:
+                cfg = self._policy.load_config(self._config_path)
+                self._policy.set_project_override(cfg, slug, enabled, self._config_path)
+                written = f"user-config:projects[{slug}]"
+            capturing = self._capture_verdict(context)[2]
+            return {
+                "status": "ok",
+                "action": action,
+                "project": slug,
+                "enabled": enabled,
+                "written_to": written,
+                "capturing": capturing,
+            }
+
+        if action == "status":
+            marker = self._policy.read_marker(root)
+            override = self._policy.project_override(view["config"], slug)
+            capturing = self._capture_verdict(context)[2]
+            return {
+                "status": "ok",
+                "project": slug,
+                "project_root": str(root) if root else None,
+                "marker": marker,
+                "user_override": override,
+                "master": view["master"],
+                "mode": view["mode"],
+                "disabled_platforms": sorted(view["disabled_platforms"]),
+                "capturing": capturing,
+            }
+
+        return {"status": "error", "error": f"unknown action {action!r}"}
+
+    def _tool_project(self, params: dict, **kwargs) -> str:
+        action = str(params.get("action") or "status").strip().lower()
+        try:
+            return json.dumps(
+                self._project_control(action, str(params.get("path") or ""), kwargs)
+            )
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
+
+    def _command_goneby(self, raw_args: str, **kwargs) -> str:
+        """`/goneby ...` — human control surface for the policy."""
+        parts = (raw_args or "").strip().split()
+        verb = parts[0].lower() if parts else "status"
+
+        if verb == "status":
+            d = self._project_control("status", "", kwargs)
+            return (
+                f"goneby: project={d['project']} capturing={d['capturing']} "
+                f"mode={d['mode']} master={'on' if d['master'] else 'off'} "
+                f"marker={d['marker']} override={d['user_override']} "
+                f"disabled_platforms={','.join(d['disabled_platforms']) or '-'}"
+            )
+
+        if verb in ("enable", "disable"):
+            d = self._project_control(verb, " ".join(parts[1:]), kwargs)
+            if d.get("status") != "ok":
+                return f"goneby: {d.get('error')}"
+            return (
+                f"goneby: project {d['project']} {verb}d -> "
+                f"capturing={d['capturing']} ({d['written_to']})"
+            )
+
+        if verb == "gate" and len(parts) >= 2:
+            enabled = parts[1].lower() in ("on", "enable", "true")
+            self._policy.set_master_enabled(enabled, self._config_path)
+            return (
+                f"goneby: master capture gate {'ON' if enabled else 'OFF'} "
+                "(all projects and gateways, persisted)"
+            )
+
+        if verb == "mode" and len(parts) >= 2:
+            mode = parts[1].strip().lower()
+            try:
+                self._policy.set_mode(mode, self._config_path)
+            except ValueError:
+                return "goneby: mode must be 'all' or 'opt-in'"
+            detail = (
+                "capture everything not excluded"
+                if mode == "all"
+                else "capture only explicitly enabled projects"
+            )
+            return f"goneby: capture mode -> '{mode}' ({detail})"
+
+        if verb == "platform" and len(parts) >= 3:
+            name = parts[1].strip().lower()
+            flag = parts[2].strip().lower()
+            if flag not in ("on", "off"):
+                return "goneby: usage /goneby platform <id> on|off"
+            self._policy.set_platform(name, flag == "on", self._config_path)
+            return (
+                f"goneby: gateway platform '{name}' capture "
+                f"{'ENABLED' if flag == 'on' else 'DISABLED'} (persisted)"
+            )
+
+        return (
+            "usage: /goneby [status | enable [path] | disable [path] | "
+            "gate on|off | mode all|opt-in | platform <id> on|off]"
+        )
