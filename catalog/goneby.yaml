@@ -1,7 +1,6 @@
 name: goneby
 repo: https://github.com/rahlquist/goneby
 sha: <PIN-FILLED-AT-SUBMISSION>            # full 40-hex of the catalog-ready main commit
-subdir: plugin
 title: GoneBy
 description: >-
   Retroactive project memory for LLM agents. Captures every turn into an
