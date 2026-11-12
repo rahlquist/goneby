@@ -1,0 +1,39 @@
+name: goneby
+version: 1.0.0
+description: "Retroactive project memory — encrypted per-project WAL capture at every turn, backward-walk filtering against the shipped product, and scoped semantic recall."
+author: "rahlquist"
+requires_hermes: ">=0.23.0"
+requires_env:
+  - GONEBY_ENCRYPTION_KEY
+config_schema:
+  auto_capture:
+    type: boolean
+    default: true
+    description: "Append every turn of allowed projects to the WAL automatically (pre_llm_call hook)."
+  auto_recall:
+    type: boolean
+    default: false
+    description: "Inject semantic memories on every turn. Costs latency; query_memory covers the need."
+  judge_batch:
+    type: integer
+    default: 25
+    description: "Entries per backward-walk judge prompt."
+  judge_concurrency:
+    type: integer
+    default: 4
+    description: "Parallel judge batches per walk."
+  judge_max_chars:
+    type: integer
+    default: 1200
+    description: "Per-entry content cap inside judge prompts."
+provides_tools:
+  - wall_append
+  - wall_read
+  - walk_backward
+  - store_memory
+  - query_memory
+  - goneby_status
+  - goneby_project
+provides_hooks:
+  - pre_llm_call
+  - post_compaction

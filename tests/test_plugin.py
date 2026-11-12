@@ -58,6 +58,9 @@ class FakeCtx:
     def register_command(self, name, handler=None, **kwargs):
         self.commands[name] = handler
 
+    def get_config(self, key, default=None):
+        return getattr(self, "settings", {}).get(key, default)
+
 
 def make_plugin(monkeypatch, tmp_path, ctx=None, **env) -> tuple:
     """Build a plugin with a temp config and a fake Hermes context."""
@@ -69,7 +72,7 @@ def make_plugin(monkeypatch, tmp_path, ctx=None, **env) -> tuple:
     for key, value in env.items():
         monkeypatch.setenv(key, str(value))
 
-    from plugin.adapter import GoneByPlugin
+    from adapter import GoneByPlugin
 
     ctx = ctx or FakeCtx()
     plugin = GoneByPlugin(ctx)
@@ -178,6 +181,85 @@ class TestJudgeBatching:
         assert result["status"] == "ok"
 
 
+class TestCatalogReviewFixes:
+    """Regressions requested by the Hermes catalog review (PR #153868)."""
+
+    def test_secret_none_never_reads_process_env(self, monkeypatch):
+        import sys
+        import types
+
+        from adapter import _ScopedEnv
+
+        scope = types.ModuleType("agent.secret_scope")
+        scope.get_secret = lambda name: None
+        agent_mod = types.ModuleType("agent")
+        agent_mod.secret_scope = scope
+        monkeypatch.setitem(sys.modules, "agent", agent_mod)
+        monkeypatch.setitem(sys.modules, "agent.secret_scope", scope)
+        monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", "aa" * 32)
+
+        assert _ScopedEnv().get("GONEBY_ENCRYPTION_KEY", "") == ""
+
+    def test_data_paths_are_profile_scoped(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        from adapter import GoneByPlugin
+
+        home = tmp_path / "profile-home"
+        hc = types.ModuleType("hermes_constants")
+        hc.get_hermes_home = lambda: home
+        monkeypatch.setitem(sys.modules, "hermes_constants", hc)
+        for var in ("GONEBY_WAL_PATH", "GONEBY_CONFIG_PATH", "GONEBY_HERMES_STATE_DB",
+                    "GONEBY_DATA_DIR"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", "aa" * 32)
+
+        plugin = GoneByPlugin(FakeCtx())
+        assert plugin._config.wal_path == home / "plugin-data" / "goneby" / "wal"
+        assert plugin._config_path == home / "plugin-data" / "goneby" / "config.json"
+        assert plugin._state_db == home / "state.db"
+
+    def test_explicit_wal_override_wins(self, monkeypatch, tmp_path):
+        plugin, _ctx = make_plugin(monkeypatch, tmp_path)
+        assert plugin._config.wal_path == tmp_path / "wal"
+
+    def test_project_tool_has_no_path(self, monkeypatch, tmp_path):
+        _plugin, ctx = make_plugin(monkeypatch, tmp_path)
+        schema = ctx.tools["goneby_project"]["schema"]
+        assert "path" not in schema["parameters"]["properties"]
+        out = json.loads(
+            ctx.tools["goneby_project"]["handler"]({"action": "status"}, session_id="s1")
+        )
+        assert out["status"] == "ok"
+
+    def test_config_preferred_over_env(self, monkeypatch, tmp_path):
+        ctx = FakeCtx()
+        ctx.settings = {"judge_batch": 2}
+        plugin, _ = make_plugin(monkeypatch, tmp_path, ctx=ctx)
+        monkeypatch.setenv("GONEBY_JUDGE_BATCH", "9")
+        assert plugin._int_setting("judge_batch", "GONEBY_JUDGE_BATCH", default=25) == 2
+
+    def test_bool_coercion_from_config(self, monkeypatch, tmp_path):
+        ctx = FakeCtx()
+        ctx.settings = {"auto_recall": True}
+        plugin, _ = make_plugin(monkeypatch, tmp_path, ctx=ctx)
+        monkeypatch.setenv("GONEBY_AUTO_RECALL", "false")
+        assert plugin._flag_setting("auto_recall", "GONEBY_AUTO_RECALL", default=False) is True
+
+
+class TestWalPermissions:
+    def test_wal_file_is_owner_only(self, tmp_path):
+        from goneby.crypto.cipher import Cipher
+        from goneby.wal.writer import WALWriter
+
+        wal = tmp_path / "wal" / "proj.wal"
+        w = WALWriter(wal, Cipher(Cipher.generate_key()))
+        w.append("secret project data")
+        assert (wal.stat().st_mode & 0o777) == 0o600
+        assert (wal.parent.stat().st_mode & 0o777) == 0o700
+
+
 class TestRegistration:
     def test_registers_declared_tools(self, monkeypatch, tmp_path):
         _, ctx = make_plugin(monkeypatch, tmp_path)
@@ -216,7 +298,7 @@ class TestRegistration:
         monkeypatch.delenv("GONEBY_ENCRYPTION_KEY", raising=False)
         monkeypatch.setenv("GONEBY_WAL_PATH", str(tmp_path / "wal"))
 
-        from plugin.adapter import GoneByPlugin
+        from adapter import GoneByPlugin
 
         ctx = FakeCtx()
         GoneByPlugin(ctx).register()
@@ -460,7 +542,7 @@ class TestTools:
         monkeypatch.delenv("GONEBY_ENCRYPTION_KEY", raising=False)
         monkeypatch.setenv("GONEBY_WAL_PATH", str(tmp_path / "wal"))
 
-        from plugin.adapter import GoneByPlugin
+        from adapter import GoneByPlugin
 
         ctx = FakeCtx()
         GoneByPlugin(ctx).register()
@@ -472,7 +554,7 @@ class TestTools:
         monkeypatch.delenv("GONEBY_ENCRYPTION_KEY", raising=False)
         monkeypatch.setenv("GONEBY_WAL_PATH", str(tmp_path / "wal"))
 
-        from plugin.adapter import GoneByPlugin
+        from adapter import GoneByPlugin
 
         ctx = FakeCtx()
         GoneByPlugin(ctx).register()
@@ -556,7 +638,7 @@ class TestTools:
             monkeypatch.setenv("GONEBY_EMBEDDING_BASE_URL", base_url)
             monkeypatch.setenv("GONEBY_VECTOR_BACKEND", "memory")
 
-            from plugin.adapter import GoneByPlugin
+            from adapter import GoneByPlugin
 
             ctx = FakeCtx()
             GoneByPlugin(ctx).register()
@@ -613,12 +695,12 @@ class TestTools:
 
 class TestMessageText:
     def test_string_content(self):
-        from plugin.adapter import message_text
+        from adapter import message_text
 
         assert message_text({"content": "hello"}) == "hello"
 
     def test_list_content_extracts_text_parts(self):
-        from plugin.adapter import message_text
+        from adapter import message_text
 
         msg = {
             "content": [
@@ -630,7 +712,7 @@ class TestMessageText:
         assert message_text(msg) == "first\nsecond"
 
     def test_multimodal_user_message(self):
-        from plugin.adapter import message_text
+        from adapter import message_text
 
         msg = {
             "content": [
@@ -641,19 +723,19 @@ class TestMessageText:
         assert message_text(msg) == "what is this"
 
     def test_none_content(self):
-        from plugin.adapter import message_text
+        from adapter import message_text
 
         assert message_text({}) == ""
 
     def test_identity_prefers_uid(self):
-        from plugin.adapter import message_identity
+        from adapter import message_identity
 
         a = message_identity({"role": "user", "content": "x", "message_uid": "abc"})
         b = message_identity({"role": "user", "content": "x", "message_uid": "abc"})
         assert a == b == "uid:abc"
 
     def test_identity_falls_back_to_content_hash(self):
-        from plugin.adapter import message_identity
+        from adapter import message_identity
 
         a = message_identity({"role": "user", "content": "same"})
         b = message_identity({"role": "assistant", "content": "same"})
@@ -705,16 +787,11 @@ class TestCapturePolicy:
         repo.mkdir()
         _plugin, ctx = make_plugin(monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="opt-in")
 
-        out = ctx.tools["goneby_project"]["handler"](
-            {"action": "enable", "path": str(repo)}, session_id="s1"
-        )
-        import json as _json
-
-        verdict = _json.loads(out)
-        assert verdict["status"] == "ok"
+        # path targeting is an OPERATOR action: the slash command keeps it,
+        # the model-callable tool no longer accepts path at all.
+        reply = ctx.commands["goneby"](f"enable {repo}", session_id="s1")
+        assert "usage" not in reply.lower() and "error" not in reply.lower()
         assert (repo / ".goneby.json").exists()
-        # marker at repo path, but session id is unknown => slug stays default project
-        assert verdict["written_to"].endswith(".goneby.json")
 
     def test_project_slug_comes_from_state_db(self, monkeypatch, tmp_path):
         repo = tmp_path / "realrepo"

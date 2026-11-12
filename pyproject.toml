@@ -24,3 +24,7 @@ goneby = "goneby.cli.main:main"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.pytest.ini_options]
+importmode = "importlib"
+testpaths = ["tests"]

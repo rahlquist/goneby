@@ -30,15 +30,31 @@ import json
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import Any
 
 
-def _int_env(name: str, default: int) -> int:
-    """Read an int env var, tolerating garbage by falling back to default."""
+def _coerce_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        if v in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _hermes_home() -> Path | None:
+    """The active profile's Hermes home via public constants, or None outside Hermes."""
     try:
-        return int(os.environ.get(name, "") or default)
-    except ValueError:
-        return default
+        from hermes_constants import get_hermes_home
+
+        return get_hermes_home()
+    except Exception:  # noqa: BLE001 - not running inside a Hermes install
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +73,6 @@ class _ScopedEnv:
     """
 
     def get(self, name: str, default: str = "") -> str:
-        import os
 
         if not name.startswith("GONEBY_"):
             return os.environ.get(name, default)
@@ -70,7 +85,11 @@ class _ScopedEnv:
         except Exception:  # noqa: BLE001 - scope unset under multiplexing
             return ""      # fail closed: no secret for this profile
         if value is None:
-            return os.environ.get(name, default)
+            # get_secret already applies the documented, *scoped* env ladder
+            # when it is safe to. A None here means "not set for this profile"
+            # — reading the process-wide os.environ would let one profile pick
+            # up another profile's key in a multiplexed gateway.
+            return ""
         return value
 
 
@@ -132,11 +151,28 @@ class GoneByPlugin:
 
         self._scoped_env = _ScopedEnv()
         self._config = GoneByConfig.from_env(self._scoped_env)
+
+        # Hermes installs keep per-profile data per profile: default the WAL
+        # and policy file under get_hermes_home()/plugin-data/goneby so two
+        # profiles never share one transcript log. Explicit env overrides win;
+        # outside Hermes (CLI/MCP/tests) the standalone ~/.goneby default stays.
+        home = _hermes_home()
+        data_env = self._env("GONEBY_DATA_DIR", "").strip()
+        if data_env:
+            self._data_dir = Path(data_env).expanduser()
+        elif home is not None:
+            self._data_dir = home / "plugin-data" / "goneby"
+        else:
+            self._data_dir = Path("~/.goneby").expanduser()
+        if not self._env("GONEBY_WAL_PATH", "").strip():
+            self._config.wal_path = self._data_dir / "wal"
         self._wal_path = project_wal_path(self._config.wal_path, self._config.project)
 
-        # Opt-in recall: a search on every turn costs latency.
-        self.auto_recall = self._env_flag("GONEBY_AUTO_RECALL", default=False)
-        self.auto_capture = self._env_flag("GONEBY_AUTO_CAPTURE", default=True)
+        # Operator knobs live in plugin config (plugins.entries.goneby.settings.*);
+        # the GONEBY_* env vars remain as a fallback for headless/legacy setups.
+        self.auto_recall = self._flag_setting("auto_recall", "GONEBY_AUTO_RECALL", default=False)
+        self.auto_capture = self._flag_setting("auto_capture", "GONEBY_AUTO_CAPTURE", default=True)
+
 
         # Capture policy: master switch, mode (all|opt-in), per-gateway kills,
         # per-project marker (.goneby.json at the repo root) or user override
@@ -147,10 +183,19 @@ class GoneByPlugin:
         from goneby.config import policy as _policy
 
         self._policy = _policy
-        self._config_path = _policy.default_config_path()
-        self._state_db = _Path(
-            self._env("GONEBY_HERMES_STATE_DB", "~/.hermes/state.db")
-        ).expanduser()
+        cfg_env = self._env("GONEBY_CONFIG_PATH", "").strip()
+        self._config_path = (
+            Path(cfg_env).expanduser() if cfg_env else self._data_dir / "config.json"
+        )
+        # Hermes' state.db lives inside the ACTIVE profile's home, not at a
+        # hardcoded ~/.hermes — resolve it the same way.
+        db_env = self._env("GONEBY_HERMES_STATE_DB", "").strip()
+        if db_env:
+            self._state_db = Path(db_env).expanduser()
+        elif home is not None:
+            self._state_db = home / "state.db"
+        else:
+            self._state_db = _Path("~/.hermes/state.db").expanduser()
         self._session_ctx_cache: dict[str, Any] = {}
         self._stores: dict[str, Any] = {}
         # Skip recall for very short turns ("ok", "continue") — rarely a query.
@@ -178,6 +223,32 @@ class GoneByPlugin:
 
     def _env(self, name: str, default: str = "") -> str:
         return self._scoped_env.get(name, default)
+
+    def _config_value(self, key: str):
+        """plugins.entries.goneby.settings.<key>, or None when unavailable."""
+        try:
+            return self._ctx.get_config(key, None)
+        except Exception:  # noqa: BLE001 - host without config bridge
+            return None
+
+    def _flag_setting(self, key: str, env_name: str, *, default: bool) -> bool:
+        v = _coerce_bool(self._config_value(key))
+        if v is not None:
+            return v
+        return self._env_flag(env_name, default=default)
+
+    def _int_setting(self, key: str, env_name: str, *, default: int) -> int:
+        v = self._config_value(key)
+        try:
+            if v is not None:
+                return max(1, int(v))
+        except (TypeError, ValueError):
+            pass
+        raw = self._env(env_name, "").strip()
+        try:
+            return max(1, int(raw)) if raw else default
+        except ValueError:
+            return default
 
     def _env_flag(self, name: str, *, default: bool) -> bool:
         raw = self._env(name).strip().lower()
@@ -463,19 +534,15 @@ class GoneByPlugin:
             schema=self._schema(
                 "goneby_project",
                 "Enable, disable, or inspect GoneBy capture for the current "
-                "project (or one given by an explicit path). Writes "
-                ".goneby.json at the project root when it exists, otherwise "
-                "falls back to a user-level override in ~/.goneby/config.json.",
+                "session's project. Writes .goneby.json at the project root "
+                "when it exists, otherwise falls back to a user-level override "
+                "in the plugin's profile config. Targeting another path is an "
+                "operator action: /goneby enable <path>.",
                 {
                     "action": {
                         "type": "string",
                         "enum": ["enable", "disable", "status"],
                         "description": "What to do.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Project root path (optional; defaults "
-                        "to this session's repo/cwd).",
                     },
                 },
                 required=["action"],
@@ -763,9 +830,9 @@ class GoneByPlugin:
         request timeout on any real project. Each batch fails open independently,
         so one unusable answer keeps that batch instead of destroying the walk.
         """
-        batch_size = max(1, _int_env("GONEBY_JUDGE_BATCH", 25))
-        max_chars = max(200, _int_env("GONEBY_JUDGE_MAX_CHARS", 1200))
-        conc = max(1, _int_env("GONEBY_JUDGE_CONCURRENCY", 4))
+        batch_size = self._int_setting("judge_batch", "GONEBY_JUDGE_BATCH", default=25)
+        max_chars = max(200, self._int_setting("judge_max_chars", "GONEBY_JUDGE_MAX_CHARS", default=1200))
+        conc = self._int_setting("judge_concurrency", "GONEBY_JUDGE_CONCURRENCY", default=4)
         instructions = (
             "You are a relevance judge for a project memory system. Given the "
             "shipped product, decide which project log entries contributed to it. "
@@ -990,7 +1057,10 @@ class GoneByPlugin:
         action = str(params.get("action") or "status").strip().lower()
         try:
             return json.dumps(
-                self._project_control(action, str(params.get("path") or ""), kwargs)
+                # No path argument on the model surface: a model must not be
+                # able to opt arbitrary directories into capture. The slash
+                # command keeps <path> for operators.
+                self._project_control(action, "", kwargs)
             )
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"})

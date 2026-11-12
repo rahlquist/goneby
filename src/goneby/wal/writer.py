@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,7 +25,7 @@ class WALWriter:
 
     def _ensure_directory(self) -> None:
         """Create WAL directory if it doesn't exist."""
-        self._wal_path.parent.mkdir(parents=True, exist_ok=True)
+        self._wal_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     def append(self, content: str, metadata: dict | None = None) -> None:
         """Append an encrypted entry to the WAL.
@@ -45,8 +46,12 @@ class WALWriter:
         import base64
         encoded = base64.b64encode(encrypted).decode("ascii")
 
+        new_file = not self._wal_path.exists()
         with open(self._wal_path, "a", encoding="utf-8") as f:
             f.write(encoded + "\n")
+        if new_file:
+            # Transcript material, even encrypted: keep it owner-only.
+            os.chmod(self._wal_path, 0o600)
 
     def append_raw(self, encrypted_line: str) -> None:
         """Append a pre-encrypted base64 line (for import/replay)."""
