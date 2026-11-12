@@ -71,29 +71,41 @@ class GoneByConfig:
         supply a scoped reader instead of the raw process environment.
         """
         env = os.environ if env is None else env
-        key_hex = env.get("GONEBY_ENCRYPTION_KEY", "")
+
+        def _s(name: str, default: str) -> str:
+            """Env read that treats MISSING *or EMPTY* as unset.
+
+            A host-provided reader (e.g. Hermes' profile-scoped secret reader)
+            legitimately returns "" when a value is unset for this profile —
+            feeding that into int()/Path() would crash plugin load. Empty is
+            never a meaningful value for any field here.
+            """
+            raw = env.get(name, "")
+            return raw if raw and raw.strip() else default
+
+        key_hex = _s("GONEBY_ENCRYPTION_KEY", "")
         key = bytes.fromhex(key_hex) if key_hex else b""
 
         return cls(
             encryption_key=key,
-            wal_path=Path(env.get("GONEBY_WAL_PATH", "~/.goneby/wal")).expanduser(),
-            vector_backend=env.get("GONEBY_VECTOR_BACKEND", "valkey"),
-            project=env.get("GONEBY_PROJECT", "default"),
-            valkey_host=env.get("GONEBY_VALKEY_HOST", "localhost"),
-            valkey_port=int(env.get("GONEBY_VALKEY_PORT", "6379")),
-            valkey_db=int(env.get("GONEBY_VALKEY_DB", "0")),
-            qdrant_host=env.get("GONEBY_QDRANT_HOST", "localhost"),
-            qdrant_port=int(env.get("GONEBY_QDRANT_PORT", "6333")),
-            qdrant_collection=env.get("GONEBY_QDRANT_COLLECTION", "goneby"),
-            embedding_base_url=env.get(
+            wal_path=Path(_s("GONEBY_WAL_PATH", "~/.goneby/wal")).expanduser(),
+            vector_backend=_s("GONEBY_VECTOR_BACKEND", "valkey"),
+            project=_s("GONEBY_PROJECT", "default"),
+            valkey_host=_s("GONEBY_VALKEY_HOST", "localhost"),
+            valkey_port=int(_s("GONEBY_VALKEY_PORT", "6379")),
+            valkey_db=int(_s("GONEBY_VALKEY_DB", "0")),
+            qdrant_host=_s("GONEBY_QDRANT_HOST", "localhost"),
+            qdrant_port=int(_s("GONEBY_QDRANT_PORT", "6333")),
+            qdrant_collection=_s("GONEBY_QDRANT_COLLECTION", "goneby"),
+            embedding_base_url=_s(
                 "GONEBY_EMBEDDING_BASE_URL", "http://localhost:8081/v1"
             ),
-            embedding_model=env.get(
+            embedding_model=_s(
                 "GONEBY_EMBEDDING_MODEL", "qwen3-embedding-0.6b"
             ),
-            embedding_api_key=env.get("GONEBY_EMBEDDING_API_KEY") or None,
-            embedding_dimensions=int(env.get("GONEBY_EMBEDDING_DIMENSIONS", "512")),
-            embedding_batch_size=int(env.get("GONEBY_EMBEDDING_BATCH_SIZE", "16")),
+            embedding_api_key=_s("GONEBY_EMBEDDING_API_KEY", "") or None,
+            embedding_dimensions=int(_s("GONEBY_EMBEDDING_DIMENSIONS", "512")),
+            embedding_batch_size=int(_s("GONEBY_EMBEDDING_BATCH_SIZE", "16")),
         )
 
     def validate(self) -> list[str]:

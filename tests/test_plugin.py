@@ -260,6 +260,41 @@ class TestWalPermissions:
         assert (wal.parent.stat().st_mode & 0o777) == 0o700
 
 
+class TestLoaderCrashRegression:
+    """Nov 12 incident: scoped reader returning "" (fail-closed, no scope)
+    fed int()/Path() and killed plugin load entirely."""
+
+    class EmptyEnv:
+        def get(self, name, default=""):
+            return ""
+
+    def test_from_env_survives_all_empty(self):
+        from goneby.config.settings import GoneByConfig
+
+        cfg = GoneByConfig.from_env(self.EmptyEnv())
+        assert cfg.valkey_port == 6379
+        assert cfg.embedding_dimensions == 512
+        assert cfg.embedding_batch_size == 16
+        assert str(cfg.wal_path).endswith(".goneby/wal")
+        assert cfg.encryption_key == b""
+
+    def test_judge_unwraps_dict_wrapped_flags(self, monkeypatch, tmp_path):
+        from adapter import _coerce_bool  # noqa: F401 - import smoke
+
+        ctx = FakeCtx(llm=FakeLlm(parsed={"items": [True, False]}))
+        plugin, _ = make_plugin(monkeypatch, tmp_path, ctx=ctx)
+        monkeypatch.setenv("GONEBY_JUDGE_BATCH", "2")
+        monkeypatch.setenv("GONEBY_JUDGE_CONCURRENCY", "1")
+        handler = ctx.tools["wall_append"]["handler"]
+        for c in ("keep me", "drop me"):
+            handler({"content": c, "entry_type": "note"}, session_id="s1")
+        import json as _json
+        out = _json.loads(
+            plugin._tool_walk_backward({"mvp_text": "shipped"}, session_id="s1")
+        )
+        assert out["kept_count"] == 1 and out["discarded_count"] == 1
+
+
 class TestRegistration:
     def test_registers_declared_tools(self, monkeypatch, tmp_path):
         _, ctx = make_plugin(monkeypatch, tmp_path)

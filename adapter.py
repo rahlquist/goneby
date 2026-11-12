@@ -891,6 +891,14 @@ class GoneByPlugin:
             return [True] * len(batch)
 
         parsed = getattr(result, "parsed", None)
+        # Some host models wrap the array in an object ({"items": [...]}) even
+        # when the schema demands a bare array — unwrap any single-list shape
+        # rather than failing the batch open on a technicality.
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    parsed = v
+                    break
         if isinstance(parsed, list):
             flags = [bool(x) for x in parsed]
             if len(flags) < len(batch):
