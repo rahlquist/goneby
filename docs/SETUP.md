@@ -200,18 +200,26 @@ WAL; the full pipeline lives behind the MCP/plugin tools.
 
 **Hermes plugin (automatic capture every turn — nothing to remember):**
 
-1. Copy `plugin/` into `~/.hermes/plugins/goneby/`.
-2. Edit `~/.hermes/plugins/goneby/pyproject.toml` → set the
-   `[tool.uv.sources] goneby` path to YOUR absolute checkout (required for
-   the dependency resolver; the repo ships with the author's path as an
-   example).
-3. `hermes plugins validate ~/.hermes/plugins/goneby` — expect `ok: true`.
-   (If the capability probe says `No module named 'goneby'` right after
-   enabling on a fresh install, that is the documented transitional state —
-   restart the gateway and validate again.)
-4. `hermes plugins enable goneby`, then **restart the gateway** — installed
-   dependencies only load into a fresh process.
-5. `/goneby status` in any session to see the effective capture verdict.
+The repository root IS the plugin directory: the reviewed tree carries the
+manifest, the plugin code and the library together, so any install source —
+catalog, git URL, or pinned `--ref` — is self-contained. No path editing.
+
+1. Install from the catalog once it merges (`hermes plugins install goneby`),
+   or straight from the repo today:
+   `hermes plugins install https://github.com/rahlquist/goneby --ref <FULL_SHA>`.
+2. `hermes plugins enable goneby`, then **restart the hosting process** —
+   installed dependencies only load into a fresh process. Note: if your chat
+   runs on the dashboard (desktop app), restart `hermes-dashboard`, not just
+   the gateway — tool dispatch is bound to the hosting process.
+3. `/goneby status` in any session to see the effective capture verdict.
+
+Optional tuning without env vars — non-secret knobs live in plugin config:
+`plugins.entries.goneby.settings.auto_capture/auto_recall/judge_batch/judge_concurrency/judge_max_chars`
+(the `GONEBY_*` env vars remain as a fallback). Under Hermes, runtime data
+defaults to `~/.hermes/plugin-data/goneby/` per profile (WAL + policy file);
+override with `GONEBY_DATA_DIR`/`GONEBY_WAL_PATH`.
+(If a capability probe says `No module named 'goneby'` right after enabling,
+that is the documented transitional state — restart and validate again.)
 
 With the plugin, capture is per-turn and per-project automatically (the WAL
 slug comes from the session's repo); `walk_backward`/`store_memory`/
@@ -227,7 +235,7 @@ disable-by-default `opt-in` mode. Full table: README §Capture policy.
 
 | Symptom | Cause / fix |
 |---|---|
-| Enable refuses: "goneby was not found in the package registry" | The `tool.uv.sources` path in the installed `pyproject.toml` doesn't point at a real checkout (step 7.2). |
+| Enable refuses: "goneby was not found in the package registry" | Pre-self-contained-tree install (an old copy without the library at its root). Reinstall from the repo root: `hermes plugins install https://github.com/rahlquist/goneby`. |
 | Probe says `No module named 'goneby'` after a successful enable | Transitional: the gateway is still running the old dependency environment. Restart the gateway. |
 | `connection refused` / embedder unreachable | The llama-server unit isn't running or is bound elsewhere — `curl http://127.0.0.1:8081/health`. |
 | Smoke: `vector backend reachable` fails | Valkey not running (`valkey-cli ping`) or wrong `GONEBY_VALKEY_PORT`/backend. |

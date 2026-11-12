@@ -86,7 +86,7 @@ goneby serve
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GONEBY_ENCRYPTION_KEY` | (required) | 32-byte hex key for ChaCha20-Poly1305 |
-| `GONEBY_WAL_PATH` | `~/.goneby/wal` | Path to the encrypted WAL |
+| `GONEBY_WAL_PATH` | `<data-dir>/wal` — `~/.hermes/plugin-data/goneby/` under Hermes, `~/.goneby/` standalone | Encrypted WAL location |
 | `GONEBY_PROJECT` | `default` | Project namespace for stored memories |
 | `GONEBY_VECTOR_BACKEND` | `valkey` | `valkey` or `qdrant` |
 | `GONEBY_VALKEY_HOST` / `_PORT` / `_DB` | `localhost` / `6379` / `0` | Valkey connection |
@@ -163,7 +163,7 @@ Capture is idempotent — messages are keyed on `message_uid` when present, else
 
 ### Project isolation
 
-Each project writes its own WAL (`~/.goneby/wal/<project>.wal`), so a backward walk for one project never sees another's evidence. Retrieval is scoped by default; pass `scope="all"` for deliberate cross-project lookup.
+Each project writes its own WAL (`<data-dir>/wal/<project>.wal`), so a backward walk for one project never sees another's evidence. Retrieval is scoped by default; pass `scope="all"` for deliberate cross-project lookup.
 
 The project name comes from `GONEBY_PROJECT`. To key on the working directory instead, point it at a stable slug — the plugin flattens paths safely.
 
@@ -186,10 +186,10 @@ most specific wins:
 
 | Control | Scope | Set via |
 |---|---|---|
-| **master gate** | everywhere, persisted | `/goneby gate on\|off`, `goneby gate on\|off`, `~/.goneby/config.json` |
+| **master gate** | everywhere, persisted | `/goneby gate on\|off`, `goneby gate on\|off`, `<data-dir>/config.json` |
 | **platform kill** | one gateway (`telegram`, `discord`, `cli`, `desktop`...) | `/goneby platform telegram off`, `goneby platform disable telegram`, `GONEBY_DISABLED_PLATFORMS=telegram,discord` (env is additive, not persisted) |
 | **project marker** | one repo — `.goneby.json` at the project root, team-visible, travels with the repo | `/goneby enable [path]`, `/goneby disable [path]`, `goneby project enable PATH`, `goneby_project` tool |
-| **user override** | one project, personal — `~/.goneby/config.json` `projects` map (used when no marker exists or the repo isn't writable) | `goneby project enable --project SLUG`, `goneby_project` tool fallback |
+| **user override** | one project, personal — `<data-dir>/config.json` `projects` map (used when no marker exists or the repo isn't writable) | `goneby project enable --project SLUG`, `goneby_project` tool fallback |
 
 Switching the whole system to disable-by-default: `/goneby mode opt-in` or
 `goneby mode opt-in` — then only projects with an enabling marker/override
@@ -201,7 +201,7 @@ repo directory name becomes the WAL slug, so per-project WALs are real, not
 aspirational. Sessions with no resolvable context fall back to
 `GONEBY_PROJECT`/`default`. `GONEBY_HERMES_STATE_DB` overrides the lookup path.
 
-Everything persists in `~/.goneby/config.json` (`GONEBY_CONFIG_PATH` to move
+Everything persists in `<data-dir>/config.json` (`GONEBY_CONFIG_PATH` to move
 it). `goneby_status` and `/goneby status` show the effective decision.
 
 ## Architecture
@@ -283,14 +283,15 @@ Guidelines that matter more than the exact paths:
 - `goneby status` probes the whole chain (config + live embedder) — make it
   part of any health check.
 
-### Plugin dependency source (Hermes)
+### Self-contained plugin tree (Hermes)
 
-`plugin/pyproject.toml` declares `goneby` as a `tool.uv.sources` **relative
-path** dependency (`".."` — the library at this repository's root). Nothing
-to configure: any clone resolves it, and the library pin is the plugin pin.
-`hermes plugins enable goneby` (or a catalog install) rewrites the path to
-its own checkout at admission — verified clean-room in a container with no
-other GoneBy on the system.
+The **repository root is the plugin directory**: `plugin.yaml`, `__init__.py`
+and `adapter.py` sit at the root next to `src/goneby`, and the root
+`pyproject.toml` declares the runtime dependencies (cryptography, httpx,
+valkey). A Hermes install — catalog entry, git URL, or a pinned `--ref` —
+copies this one reviewed tree, so the plugin and the library can never drift
+apart and nothing has to be edited after cloning. There is no registry
+dependency, no path source, and no network fetch beyond the clone itself.
 
 ### Verified reference deployment
 
