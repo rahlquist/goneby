@@ -199,10 +199,8 @@ class GoneByPlugin:
         self._session_ctx_cache: dict[str, Any] = {}
         self._stores: dict[str, Any] = {}
         # Skip recall for very short turns ("ok", "continue") — rarely a query.
-        self.recall_min_chars = int(
-            self._env("GONEBY_RECALL_MIN_CHARS", "12")
-        )
-        self.recall_top_k = int(self._env("GONEBY_RECALL_TOP_K", "3"))
+        self.recall_min_chars = self._env_int("GONEBY_RECALL_MIN_CHARS", 12)
+        self.recall_top_k = self._env_int("GONEBY_RECALL_TOP_K", 3)
 
         self._cipher = None
         self._store = None
@@ -247,6 +245,18 @@ class GoneByPlugin:
         raw = self._env(env_name, "").strip()
         try:
             return max(1, int(raw)) if raw else default
+        except ValueError:
+            return default
+
+    def _env_int(self, name: str, default: int) -> int:
+        """int() that treats missing/empty/garbage as unset.
+
+        A profile-scoped reader returns "" fail-closed; that must land on the
+        default, not crash plugin load (Nov 12 incident: recall_min_chars
+        killed every registration under an unbound scope).
+        """
+        try:
+            return int(self._env(name, "").strip() or default)
         except ValueError:
             return default
 

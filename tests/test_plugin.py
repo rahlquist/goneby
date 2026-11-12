@@ -278,6 +278,22 @@ class TestLoaderCrashRegression:
         assert str(cfg.wal_path).endswith(".goneby/wal")
         assert cfg.encryption_key == b""
 
+    def test_registration_survives_empty_scoped_env(self, monkeypatch, tmp_path):
+        """Nov 12: every GONEBY_* read returning "" (fail-closed, unbound scope)
+        must register fine on defaults — not crash the plugin loader."""
+        import adapter as adapter_mod
+
+        monkeypatch.setattr(
+            adapter_mod, "_ScopedEnv", lambda: type("E", (), {"get": lambda s, n, d="": ""})()
+        )
+        # from_env already handles ""; force it for the adapter's own reads too
+        monkeypatch.delenv("GONEBY_ENCRYPTION_KEY", raising=False)
+        ctx = FakeCtx()
+        try:
+            adapter_mod.GoneByPlugin(ctx)  # real __init__ must not raise
+        except ValueError as exc:  # pragma: no cover - the crash under test
+            raise AssertionError(f"plugin load crashed on empty scoped env: {exc}")
+
     def test_judge_unwraps_dict_wrapped_flags(self, monkeypatch, tmp_path):
         from adapter import _coerce_bool  # noqa: F401 - import smoke
 
