@@ -196,10 +196,11 @@ Switching the whole system to disable-by-default: `/goneby mode opt-in` or
 capture. `mode all` (default) captures everything not excluded above.
 
 **Project identity**: the plugin resolves a session's project from Hermes'
-`state.db` (`sessions.git_repo_root`, falling back to `sessions.cwd`) — the
+`ctx.session_cwd()` (a public plugin-context accessor) plus the plugin's own
+nearest-`.git`-ancestor walk — no Hermes internals are read. The
 repo directory name becomes the WAL slug, so per-project WALs are real, not
 aspirational. Sessions with no resolvable context fall back to
-`GONEBY_PROJECT`/`default`. `GONEBY_HERMES_STATE_DB` overrides the lookup path.
+`GONEBY_PROJECT`/`default`.
 
 Everything persists in `<data-dir>/config.json` (`GONEBY_CONFIG_PATH` to move
 it). `goneby_status` and `/goneby status` show the effective decision.

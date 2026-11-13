@@ -43,6 +43,7 @@ class FakeCtx:
         self.hooks: dict[str, object] = {}
         self.llm = llm or FakeLlm()
         self.commands: dict[str, object] = {}
+        self.cwd = ""
 
     def register_tool(self, name, toolset, schema, handler, **kwargs):
         self.tools[name] = {
@@ -58,6 +59,9 @@ class FakeCtx:
     def register_command(self, name, handler=None, **kwargs):
         self.commands[name] = handler
 
+    def session_cwd(self) -> str:
+        return getattr(self, "cwd", "")
+
     def get_config(self, key, default=None):
         return getattr(self, "settings", {}).get(key, default)
 
@@ -68,7 +72,6 @@ def make_plugin(monkeypatch, tmp_path, ctx=None, **env) -> tuple:
     monkeypatch.setenv("GONEBY_WAL_PATH", str(tmp_path / "wal"))
     monkeypatch.setenv("GONEBY_PROJECT", env.get("GONEBY_PROJECT", "test-proj"))
     monkeypatch.setenv("GONEBY_CONFIG_PATH", str(tmp_path / "goneby-config.json"))
-    monkeypatch.setenv("GONEBY_HERMES_STATE_DB", str(tmp_path / "absent-state.db"))
     for key, value in env.items():
         monkeypatch.setenv(key, str(value))
 
@@ -210,15 +213,14 @@ class TestCatalogReviewFixes:
         hc = types.ModuleType("hermes_constants")
         hc.get_hermes_home = lambda: home
         monkeypatch.setitem(sys.modules, "hermes_constants", hc)
-        for var in ("GONEBY_WAL_PATH", "GONEBY_CONFIG_PATH", "GONEBY_HERMES_STATE_DB",
-                    "GONEBY_DATA_DIR"):
+        for var in ("GONEBY_WAL_PATH", "GONEBY_CONFIG_PATH", "GONEBY_DATA_DIR"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", "aa" * 32)
 
         plugin = GoneByPlugin(FakeCtx())
         assert plugin._config.wal_path == home / "plugin-data" / "goneby" / "wal"
         assert plugin._config_path == home / "plugin-data" / "goneby" / "config.json"
-        assert plugin._state_db == home / "state.db"
+
 
     def test_explicit_wal_override_wins(self, monkeypatch, tmp_path):
         plugin, _ctx = make_plugin(monkeypatch, tmp_path)
@@ -804,18 +806,11 @@ class TestCapturePolicy:
         return [{"role": r, "content": c, "message_uid": f"{r}-{c}"} for r, c in pairs]
 
     @staticmethod
-    def _make_state_db(tmp_path, rows):
-        import sqlite3
-
-        db = tmp_path / "state.db"
-        con = sqlite3.connect(db)
-        con.execute(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, git_repo_root TEXT)"
-        )
-        con.executemany("INSERT INTO sessions VALUES (?, ?, ?)", rows)
-        con.commit()
-        con.close()
-        return db
+    def _repo(tmp_path, name):
+        """A directory that looks like a git worktree (nearest-.git walk)."""
+        repo = tmp_path / name
+        (repo / ".git").mkdir(parents=True)
+        return repo
 
     def _capture_hook(self, ctx, session_id="s1", platform="cli"):
         ctx.hooks["pre_llm_call"](
@@ -844,12 +839,12 @@ class TestCapturePolicy:
         assert "usage" not in reply.lower() and "error" not in reply.lower()
         assert (repo / ".goneby.json").exists()
 
-    def test_project_slug_comes_from_state_db(self, monkeypatch, tmp_path):
-        repo = tmp_path / "realrepo"
-        repo.mkdir()
-        db = self._make_state_db(tmp_path, [("s1", str(repo), str(repo))])
+    def test_project_slug_comes_from_session_cwd(self, monkeypatch, tmp_path):
+        repo = self._repo(tmp_path, "realrepo")
+        seed = FakeCtx()
+        seed.cwd = str(repo / "sub" / "dir")  # walk lands on realrepo via .git
         plugin, ctx = make_plugin(
-            monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="all", GONEBY_HERMES_STATE_DB=db
+            monkeypatch, tmp_path, ctx=seed, GONEBY_CAPTURE_MODE="all"
         )
         self._capture_hook(ctx)
         wal = plugin._get_wal("realrepo")
@@ -861,9 +856,10 @@ class TestCapturePolicy:
         repo = tmp_path / "optrepo"
         repo.mkdir()
         (repo / ".goneby.json").write_text('{"tool": "goneby", "enabled": true}')
-        db = self._make_state_db(tmp_path, [("s1", str(repo), str(repo))])
+        seed = FakeCtx()
+        seed.cwd = str(repo)
         plugin, ctx = make_plugin(
-            monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="opt-in", GONEBY_HERMES_STATE_DB=db
+            monkeypatch, tmp_path, ctx=seed, GONEBY_CAPTURE_MODE="opt-in"
         )
         self._capture_hook(ctx)
         assert plugin._get_wal("optrepo").read_all()
@@ -872,9 +868,10 @@ class TestCapturePolicy:
         repo = tmp_path / "quietrepo"
         repo.mkdir()
         (repo / ".goneby.json").write_text('{"enabled": false}')
-        db = self._make_state_db(tmp_path, [("s1", str(repo), str(repo))])
+        seed = FakeCtx()
+        seed.cwd = str(repo)
         plugin, ctx = make_plugin(
-            monkeypatch, tmp_path, GONEBY_CAPTURE_MODE="all", GONEBY_HERMES_STATE_DB=db
+            monkeypatch, tmp_path, ctx=seed, GONEBY_CAPTURE_MODE="all"
         )
         self._capture_hook(ctx)
         assert not plugin._get_wal("quietrepo").read_all()

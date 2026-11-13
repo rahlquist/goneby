@@ -79,10 +79,12 @@ repo?") is opt-in because it is genuinely useful and rarely the intent.
 
 ### Project identity (automatic)
 
-Sessions are resolved to projects from the host's own state (Hermes
-`state.db`: `git_repo_root`, falling back to `cwd`), so the WAL slug is the
-real repo name and every tool call, capture, and scoped search agrees
-without configuration. Unknown sessions fall back to `GONEBY_PROJECT`.
+Sessions are resolved to projects through the **public plugin context**
+(`ctx.session_cwd()`, bound by the host to the calling session) plus the
+plugin's own nearest-`.git`-ancestor walk — no Hermes internals are read.
+The WAL slug is the real repo name, and every tool call, capture, and
+scoped search agrees without configuration. Unknown or scopeless sessions
+fall back to `GONEBY_PROJECT`.
 
 ---
 
@@ -181,7 +183,7 @@ Any OpenAI-compatible `/v1/embeddings` endpoint:
 - 158 tests in `tests/`: WAL crypto (roundtrip, tamper, corruption markers),
   store/search behavior, scoping isolation, backward-walk judging (including
   fail-open), the full e2e pipeline (junk entries provably never stored), the
-  plugin surface against a fake Hermes ctx, state.db project resolution, and
+  plugin surface against a fake Hermes ctx, session-cwd project resolution, and
   the policy decision table.
 - Live verification against the real Qwen3-Embedding-0.6B on llama.cpp
   (2026-11-10): related/unrelated cosine margin 0.67/0.25, correct top hit,

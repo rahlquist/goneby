@@ -176,9 +176,9 @@ class GoneByPlugin:
 
         # Capture policy: master switch, mode (all|opt-in), per-gateway kills,
         # per-project marker (.goneby.json at the repo root) or user override
-        # in ~/.goneby/config.json. Session -> project resolution reads
-        # Hermes' state.db (cwd/git_repo_root) read-only.
-        from pathlib import Path as _Path
+        # in the profile config file. Session -> project resolution uses the
+        # public ctx.session_cwd() plus our own nearest-.git-ancestor walk;
+        # no Hermes internals are read.
 
         from goneby.config import policy as _policy
 
@@ -187,15 +187,7 @@ class GoneByPlugin:
         self._config_path = (
             Path(cfg_env).expanduser() if cfg_env else self._data_dir / "config.json"
         )
-        # Hermes' state.db lives inside the ACTIVE profile's home, not at a
-        # hardcoded ~/.hermes — resolve it the same way.
-        db_env = self._env("GONEBY_HERMES_STATE_DB", "").strip()
-        if db_env:
-            self._state_db = Path(db_env).expanduser()
-        elif home is not None:
-            self._state_db = home / "state.db"
-        else:
-            self._state_db = _Path("~/.hermes/state.db").expanduser()
+
         self._session_ctx_cache: dict[str, Any] = {}
         self._stores: dict[str, Any] = {}
         # Skip recall for very short turns ("ok", "continue") — rarely a query.
@@ -370,11 +362,30 @@ class GoneByPlugin:
             ),
         }
 
+    @staticmethod
+    def _find_git_root(start: str) -> Path | None:
+        """Nearest ancestor of *start* containing .git (dir or file). Pure
+        filesystem — Hermes metadata stays untouched."""
+        import os
+
+        current = os.path.abspath(start)
+        for _ in range(64):
+            if os.path.exists(os.path.join(current, ".git")):
+                return Path(current)
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+        return None
+
     def _session_project(self, session_id: str | None) -> tuple[str, Any]:
-        """(slug, root) for a Hermes session, resolved from state.db (read-only).
+        """(slug, root) for the calling session, resolved via the PUBLIC plugin
+        accessor ``ctx.session_cwd()`` (bound to the dispatching session by the
+        host) plus our own nearest-``.git``-ancestor walk. Core's private
+        ``sessions`` table is no longer read at all.
 
         Cached per session; falls back to the configured default project and
-        never raises — a lookup miss must not cost a turn.
+        never raises — a resolution miss must not cost a turn.
         """
         if not session_id:
             return self._config.project, None
@@ -384,20 +395,17 @@ class GoneByPlugin:
             return hit
         slug, root = self._config.project, None
         try:
-            import sqlite3
-
-            con = sqlite3.connect(f"file:{self._state_db}?mode=ro", uri=True, timeout=0.25)
-            try:
-                row = con.execute(
-                    "SELECT cwd, git_repo_root FROM sessions WHERE id = ?",
-                    (session_id,),
-                ).fetchone()
-            finally:
-                con.close()
-            if row:
-                slug, root = self._policy.resolve_project_slug(row[0] or "", row[1] or "")
+            cwd = str(self._ctx.session_cwd() or "").strip()
+            if cwd:
+                git_root = self._find_git_root(cwd)
+                slug, policy_root = self._policy.resolve_project_slug(
+                    cwd, str(git_root) if git_root else ""
+                )
+                root = git_root if git_root is not None else (
+                    Path(policy_root) if policy_root else None
+                )
         except Exception as exc:  # noqa: BLE001 - resolution is best-effort
-            logger.debug("goneby: session project lookup failed — %s", exc)
+            logger.debug("goneby: session project resolution failed — %s", exc)
         with self._lock:
             if len(self._session_ctx_cache) >= 256:
                 self._session_ctx_cache.clear()
