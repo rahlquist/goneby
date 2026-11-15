@@ -184,6 +184,43 @@ class TestJudgeBatching:
         assert result["status"] == "ok"
 
 
+class TestJudgeFailOpenSemantics:
+    """ctx-audit: short or empty verdict lists silently dropped the unjudged
+    tail. The documented promise is fail-open: entries the model never
+    answered KEEP, and the degradation is reported, not silent."""
+
+    @staticmethod
+    def _append(ctx, session_id, contents):
+        handler = ctx.tools["wall_append"]["handler"]
+        for c in contents:
+            handler({"content": c, "entry_type": "note"}, session_id=session_id)
+
+    def test_short_verdict_keeps_unjudged_entries(self, monkeypatch, tmp_path):
+        # WAL order: oldest, middle, newest. The walker judges newest-first,
+        # so [True, False] pairs newest=keep, middle=drop; oldest is unjudged.
+        llm = FakeLlm(parsed=[True, False])
+        plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
+        self._append(ctx, "s1", ["oldest unjudged tail", "middle dropped", "newest kept"])
+        result = json.loads(
+            plugin._tool_walk_backward({"mvp_text": "shipped"}, session_id="s1")
+        )
+        kept = [e["content"] for e in result["kept_entries"]]
+        assert "oldest unjudged tail" in kept, "unjudged entry dropped — judge must fail open"
+        assert "newest kept" in kept
+        assert "middle dropped" not in kept, "an explicit False must still discard"
+        assert result["judge_fallback_batches"] == 1
+
+    def test_empty_verdict_keeps_whole_batch(self, monkeypatch, tmp_path):
+        llm = FakeLlm(parsed=[])
+        plugin, ctx = make_plugin(monkeypatch, tmp_path, ctx=FakeCtx(llm=llm))
+        self._append(ctx, "s1", ["only entry"])
+        result = json.loads(
+            plugin._tool_walk_backward({"mvp_text": "shipped"}, session_id="s1")
+        )
+        assert result["kept_count"] == 1, "empty verdict list wiped the batch silently"
+        assert result["judge_fallback_batches"] == 1
+
+
 class TestCatalogReviewFixes:
     """Regressions requested by the Hermes catalog review (PR #153868)."""
 

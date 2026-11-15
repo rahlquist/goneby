@@ -126,3 +126,35 @@ class TestLLMJudge:
 
         import asyncio
         asyncio.run(run())
+
+    def test_short_json_keeps_unjudged_entries(self):
+        """ctx-audit: missing answers pad to KEEP, not to drop."""
+
+        async def llm_fn(prompt):
+            return "[true, false]"
+
+        judge = LLMJudge(llm_fn)
+
+        async def run():
+            entries = [{"content": "A"}, {"content": "B"}, {"content": "C"}]
+            flags = await judge.judge("MVP", entries)
+            assert flags == [True, False, True]
+
+        import asyncio
+        asyncio.run(run())
+
+    def test_empty_json_keeps_all(self):
+        """ctx-audit: an empty verdict array must not wipe the batch."""
+
+        async def llm_fn(prompt):
+            return "[]"
+
+        judge = LLMJudge(llm_fn)
+
+        async def run():
+            entries = [{"content": "A"}, {"content": "B"}]
+            flags = await judge.judge("MVP", entries)
+            assert flags == [True, True]
+
+        import asyncio
+        asyncio.run(run())

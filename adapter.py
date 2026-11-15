@@ -144,6 +144,7 @@ class GoneByPlugin:
         self._ctx = ctx
         self._lock = threading.RLock()
         self._seen: set[str] = set()
+        self._judge_fallback_batches = 0
         self._loop: Any = None
         self._loop_thread: threading.Thread | None = None
 
@@ -831,6 +832,7 @@ class GoneByPlugin:
                     "discarded_count": result.discarded_count,
                     "total_count": result.total_count,
                     "dedup_count": result.dedup_count,
+                    "judge_fallback_batches": self._judge_fallback_batches,
                     "kept_entries": result.kept_entries,
                 }
             )
@@ -868,7 +870,7 @@ class GoneByPlugin:
             idx, batch = idx_batch
             return idx, self._judge_batch(instructions, mvp_text, batch, max_chars)
 
-        flags_by_index: dict[int, list[bool]] = {}
+        flags_by_index: dict[int, tuple[list[bool], int]] = {}
         if conc == 1 or len(batches) <= 1:
             for idx, batch in enumerate(batches):
                 flags_by_index[idx] = self._judge_batch(
@@ -878,14 +880,16 @@ class GoneByPlugin:
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as pool:
-                for idx, flags in pool.map(judge_one, enumerate(batches)):
-                    flags_by_index[idx] = flags
+                for idx, verdict in pool.map(judge_one, enumerate(batches)):
+                    flags_by_index[idx] = verdict
 
-        return [f for idx in sorted(flags_by_index) for f in flags_by_index[idx]]
+        self._judge_fallback_batches = sum(v[1] for v in flags_by_index.values())
+        return [f for idx in sorted(flags_by_index) for f in flags_by_index[idx][0]]
 
     def _judge_batch(
         self, instructions: str, mvp_text: str, batch: list, max_chars: int
-    ) -> list[bool]:
+    ) -> tuple[list[bool], int]:
+        """Judge one batch. Returns (keep-flags, fallback_batches)."""
         entries_text = "\n\n".join(
             f"--- Entry {i} ---\n{e.get('content', '')[:max_chars]}"
             for i, e in enumerate(batch)
@@ -906,7 +910,7 @@ class GoneByPlugin:
             )
         except Exception as exc:  # noqa: BLE001 — fail open per batch
             logger.warning("goneby: judge batch failed (%s); keeping batch", exc)
-            return [True] * len(batch)
+            return [True] * len(batch), 1
 
         parsed = getattr(result, "parsed", None)
         # Some host models wrap the array in an object ({"items": [...]}) even
@@ -918,10 +922,7 @@ class GoneByPlugin:
                     parsed = v
                     break
         if isinstance(parsed, list):
-            flags = [bool(x) for x in parsed]
-            if len(flags) < len(batch):
-                flags.extend([False] * (len(batch) - len(flags)))
-            return flags[: len(batch)]
+            return self._pad_verdict([bool(x) for x in parsed], batch)
 
         # Fall back to parsing the raw text if structured parsing was unavailable.
         import re
@@ -930,15 +931,29 @@ class GoneByPlugin:
         match = re.search(r"\[[\s,true|false]*\]", raw)
         if match:
             try:
-                flags = json.loads(match.group())
-                if len(flags) < len(batch):
-                    flags.extend([False] * (len(batch) - len(flags)))
-                return flags[: len(batch)]
+                return self._pad_verdict(json.loads(match.group()), batch)
             except json.JSONDecodeError:
                 pass
 
         logger.warning("goneby: judge batch returned unusable output; keeping batch")
-        return [True] * len(batch)
+        return [True] * len(batch), 1
+
+    @staticmethod
+    def _pad_verdict(flags: list[bool], batch: list) -> tuple[list[bool], int]:
+        """Align a verdict list with its batch under the documented fail-open
+        rule: entries the model never answered are KEPT, never silently
+        dropped. Returns (flags, fallback_batches)."""
+        if not flags:
+            logger.warning("goneby: judge returned an empty verdict list; keeping batch")
+            return [True] * len(batch), 1
+        if len(flags) < len(batch):
+            logger.warning(
+                "goneby: judge returned %d/%d flags; keeping unjudged entries",
+                len(flags),
+                len(batch),
+            )
+            return flags + [True] * (len(batch) - len(flags)), 1
+        return flags[: len(batch)], 0
 
     def _tool_store_memory(self, params: dict, **kwargs) -> str:
         not_ready = self._require_ready()

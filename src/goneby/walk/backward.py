@@ -197,9 +197,11 @@ JSON array:"""
             match = re.search(r"\[[\s,true|false]*\]", response)
             if match:
                 flags = json.loads(match.group())
-                # Ensure we have the right number of flags
+                # Ensure we have the right number of flags. Documented
+                # fail-open: entries the model never answered KEEP, never
+                # silently drop (ctx-audit: this used to pad False).
                 if len(flags) < len(entries):
-                    flags.extend([False] * (len(entries) - len(flags)))
+                    flags.extend([True] * (len(entries) - len(flags)))
                 return flags[: len(entries)]
         except (json.JSONDecodeError, ValueError):
             pass
