@@ -86,7 +86,8 @@ goneby serve
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GONEBY_ENCRYPTION_KEY` | (required) | 32-byte hex key for ChaCha20-Poly1305 |
-| `GONEBY_WAL_PATH` | `<data-dir>/wal` — `~/.hermes/plugin-data/goneby/` under Hermes, `~/.goneby/` standalone | Encrypted WAL location |
+| `GONEBY_DATA_DIR` | `~/.goneby/` | Shared data dir (WAL + policy file) for CLI, MCP server, and Hermes plugin alike; set per profile to keep stores apart |
+| `GONEBY_WAL_PATH` | `<data-dir>/wal` | Encrypted WAL location |
 | `GONEBY_PROJECT` | `default` | Project namespace for stored memories |
 | `GONEBY_VECTOR_BACKEND` | `valkey` | `valkey` or `qdrant` |
 | `GONEBY_VALKEY_HOST` / `_PORT` / `_DB` | `localhost` / `6379` / `0` | Valkey connection |
@@ -97,6 +98,10 @@ goneby serve
 | `GONEBY_EMBEDDING_API_KEY` | (none) | Bearer token, for hosted embedders |
 | `GONEBY_EMBEDDING_DIMENSIONS` | `512` | MRL truncation target |
 | `GONEBY_EMBEDDING_BATCH_SIZE` | `16` | Texts per request |
+| `GONEBY_LLM_PROVIDER` | `openai` | Judge provider for `walk_backward` (standalone): `openai` (any OpenAI-compatible server) or `anthropic` (needs `goneby[anthropic]`) |
+| `GONEBY_LLM_BASE_URL` | (none) | Chat-completions base URL for the judge — unset means `walk_backward` errors until configured |
+| `GONEBY_LLM_MODEL` | (none) | Judge model name — GoneBy never defaults to a vendor model |
+| `GONEBY_LLM_API_KEY` | (none) | Bearer token for the judge endpoint |
 
 ## MCP Tools
 
@@ -171,12 +176,13 @@ The project name comes from `GONEBY_PROJECT`. To key on the working directory in
 
 The same six tools the MCP server exposes, registered as first-class Hermes tools: `wall_append`, `wall_read`, `walk_backward`, `store_memory`, `query_memory`, `goneby_status`.
 
-`walk_backward` judges relevance through `ctx.llm.complete_structured` — it borrows the user's active model and auth, so there is no separate API key and no hardcoded provider.
+Under Hermes, `walk_backward` judges relevance through `ctx.llm.complete_structured` — it borrows the user's active model and auth, so there is no separate API key and no hardcoded provider. Standalone (MCP server), the judge is configured, never defaulted: point `GONEBY_LLM_BASE_URL`/`GONEBY_LLM_MODEL` at any OpenAI-compatible chat endpoint, or use the opt-in `goneby[anthropic]` extra.
 
 ## Security
 
-- WAL entries are encrypted independently with ChaCha20-Poly1305 and a random 96-bit nonce, then base64-encoded one per line. Append-only — existing entries are never rewritten.
-- A wrong key or damaged line yields a `CORRUPTED` marker rather than aborting the read or leaking plaintext.
+- WAL entries are encrypted independently with ChaCha20-Poly1305 and a random 96-bit nonce. v2 lines additionally bind **file name, directory token, and sequence** as additional-authenticated-data: deleting, reordering, or copying lines from another WAL is detected ([GAP]/out-of-order markers, failed tags). A deletion at the very end of a file cannot be detected without a head-hash chain — documented limitation, future work.
+- A wrong key or damaged line yields a `CORRUPTED` marker (wrong key is called out via the `.keyid` sidecar) rather than aborting the read or leaking plaintext. Legacy pre-v2 lines stay readable and are flagged `integrity: unbound`.
+- **The searchable store is plaintext by design.** Walk survivors are embedded *and* stored with their text in Valkey/Qdrant, because semantic search and answers need the content. What the encryption protects: the raw transcript log at rest, and copies/backups of it. Protect the vector store with its own access controls.
 - **Losing the key means losing the WAL.** Store it in Bitwarden or the Hermes vault, not in the repo.
 
 ## Capture policy

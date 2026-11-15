@@ -81,7 +81,7 @@ design, because each became a feature:
 | Problem (Sept 24) | Feature (Nov 11) |
 |---|---|
 | You can't load the whole past in one pass — walk segment-wise, carry the kept forward | The backward walk runs as a running filter; content-hashed IDs make every pass idempotent |
-| Early "noise" can be the setup for a late breakthrough | Relevance is judged with carried-forward context, and the judge **fails open** — a doubtful call keeps the evidence, never destroys it |
+| Early "noise" can be the setup for a late breakthrough | Relevance is judged batch-wise against the product description (carried-forward context across batches remains an idea, not shipped), and the judge **fails open** — a doubtful *or missing* call keeps the evidence, never destroys it |
 | The same idea appears in every segment | Deduplication happens during the walk, where redundancy is obvious — not at capture, where it isn't |
 
 ## Deliberately not an ecosystem bolt-on

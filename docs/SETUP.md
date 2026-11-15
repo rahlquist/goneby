@@ -136,8 +136,10 @@ docker run -d -p 127.0.0.1:6333:6333 qdrant/qdrant
 
 Then `export GONEBY_VECTOR_BACKEND=qdrant` — host/port/collection defaults to
 `localhost:6333` / collection `goneby`. Qdrant gives native payload filtering;
-the valkey backend does the same filtering in-process (fine for thousands to
-tens of thousands of entries).
+the valkey backend does the same filtering in-process. Both are sized for one
+user with thousands to tens of thousands of entries — a design target, not a
+measured ceiling; the live Qdrant integration test proves behavior, not
+throughput.
 
 ## 5 · Point GoneBy at the stack
 
@@ -147,6 +149,9 @@ minimal complete wiring for a non-Hermes install:
 ```bash
 export GONEBY_ENCRYPTION_KEY=<from step 2>
 export GONEBY_EMBEDDING_BASE_URL=http://localhost:8081/v1
+# walk_backward needs a judge LLM — GoneBy never defaults to a vendor:
+export GONEBY_LLM_BASE_URL=http://localhost:8081/v1   # any OpenAI-compatible chat endpoint
+export GONEBY_LLM_MODEL=<your judge model>
 # vector backend + WAL path defaults are already correct
 ```
 
@@ -215,9 +220,10 @@ catalog, git URL, or pinned `--ref` — is self-contained. No path editing.
 
 Optional tuning without env vars — non-secret knobs live in plugin config:
 `plugins.entries.goneby.settings.auto_capture/auto_recall/judge_batch/judge_concurrency/judge_max_chars`
-(the `GONEBY_*` env vars remain as a fallback). Under Hermes, runtime data
-defaults to `~/.hermes/plugin-data/goneby/` per profile (WAL + policy file);
-override with `GONEBY_DATA_DIR`/`GONEBY_WAL_PATH`.
+(the `GONEBY_*` env vars remain as a fallback). The data dir (WAL + policy
+file) defaults to `~/.goneby/` for the CLI, the MCP server, and the Hermes
+plugin alike — one shared store, no split-brain. Set `GONEBY_DATA_DIR` per
+profile for a private store, or `GONEBY_WAL_PATH` to relocate outright.
 (If a capability probe says `No module named 'goneby'` right after enabling,
 that is the documented transitional state — restart and validate again.)
 

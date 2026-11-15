@@ -177,7 +177,7 @@
         <rect x="930" y="260" width="100" height="60" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
         <text x="980" y="285" fill="white" font-size="10" font-weight="600" text-anchor="middle">Kept Entries</text>
         <text x="980" y="300" fill="#94a3b8" font-size="8" text-anchor="middle">Filtered Set</text>
-        <text x="980" y="313" fill="#34d399" font-size="7" text-anchor="middle">~10-20% of WAL</text>
+        <text x="980" y="313" fill="#34d399" font-size="7" text-anchor="middle">target: 10-20% of WAL (design)</text>
 
         <!-- Arrows: Backward walk flow -->
         <line x1="170" y1="290" x2="208" y2="290" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
@@ -333,7 +333,7 @@
           <li>• Walks newest → oldest (verification)</li>
           <li>• LLM judges relevance against shipped MVP</li>
           <li>• Deduplicates by content hash</li>
-          <li>• Keeps ~10-20% of entries</li>
+          <li>• Target: keeps ~10-20% of entries (unmeasured; baseline planned in docs/BASELINE.md)</li>
         </ul>
       </div>
 

@@ -50,11 +50,17 @@ judgment is hardest. GoneBy asks *what did matter?* (verification) after the
 artifact exists — verification is cheap, prediction is not. No existing
 memory system (Mem0, MemGPT, Cognee, LangGraph, Letta) does this.
 
-- The judge is your **active LLM**, borrowed via the host's structured
-  completion API — no extra API key, no provider hardcoded.
-- The judge **fails open**: an unparseable verdict means "keep everything".
-  A bad judgment day costs storage, never evidence.
-- Duplicate/near-duplicate survivors are deduplicated during the walk.
+- The judge is your **active LLM** under Hermes (borrowed via the host's
+  structured completion API) and a configured endpoint standalone
+  (`GONEBY_LLM_BASE_URL`/`GONEBY_LLM_MODEL`) — no provider hardcoded
+  anywhere, no vendor defaulted.
+- The judge **fails open**: an error, an unparseable verdict, or *fewer
+  answers than entries* all mean "keep everything"; walks report
+  `judge_fallback_batches` so degradation is visible. A bad judgment day
+  costs storage, never evidence.
+- Survivors are deduplicated during the walk — entries identical after
+  case/whitespace/trailing-punctuation normalization. Semantic
+  near-duplicates are *not* merged; that is out of scope for v1.
 
 ### Phase 3 — Store
 
@@ -94,8 +100,8 @@ fall back to `GONEBY_PROJECT`.
 |---|---|
 | **Zero token cost during work** | Capture is file I/O only. No summarization passes, no "memory manager" LLM calls interrupting the project. |
 | **Verified, not guessed, relevance** | The backward walk judges against the shipped artifact — a ground truth that literally does not exist mid-project. |
-| **Evidence can't be destroyed by a bad model day** | The judge fails open to keeping everything; encryption failures mark corruption instead of dropping data. |
-| **Nothing sensitive in plaintext anywhere** | WAL encrypted per-entry; store scoping keeps memories out of unrelated projects. |
+| **Evidence can't be destroyed by a bad model day** | The judge fails open to keeping everything — errors, garbage, and short/empty answer lists; fallback batches are reported, not silent. |
+| **The transcript log is encrypted and position-bound** | Per-entry ChaCha20-Poly1305 with file+sequence AAD binding: deletions, reorders, and cross-log splices surface as markers. The *searchable store holds plaintext by design* (semantic search needs it) — protect it with store-side access controls. Project-scoped IDs keep memories out of unrelated projects. |
 | **Coexists with everything** | Implemented as a *general plugin*, not a memory provider — it never claims or displaces a memory-provider slot (Mem0, Honcho, built-in). At project close it hands your memory system additional semantically searchable data: the verified choices that reached completion. |
 | **You decide what it remembers of you** | Default-on capture is fully overridable per project, per gateway, or globally (see §3). |
 | **Re-runnable and auditable** | Content-hash IDs make every phase idempotent; the WAL remains the full raw record even after selective storage. |
