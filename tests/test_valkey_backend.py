@@ -128,3 +128,65 @@ async def _requires_connection():
 
 def test_operations_require_connection():
     asyncio.run(_requires_connection())
+
+
+@pytest.mark.integration
+class TestLiveValkey:
+    """Real Valkey over TCP — the asyncio-client contract end to end.
+
+    Start one with:
+        docker run -d --rm --name goneby-valkey-test -p 6379:6379 valkey/valkey:8
+    """
+
+    @staticmethod
+    def _reachable(host="127.0.0.1", port=6379) -> bool:
+        import socket
+
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except OSError:
+            return False
+
+    def test_roundtrip_against_real_server(self):
+        if not self._reachable():
+            pytest.skip("no live Valkey on :6379 — start the container from the class docstring")
+
+        async def go():
+            backend = ValkeyBackend(host="127.0.0.1", port=6379, db=15)
+            await backend.connect()
+            try:
+                await backend.clear()
+                north = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+                also = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+                east = "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                data = {
+                    north: ([1.0, 0.0, 0.0, 0.0], "north", "alpha"),
+                    also: ([0.9, 0.1, 0.0, 0.0], "also-north", "alpha"),
+                    east: ([0.0, 1.0, 0.0, 0.0], "east", "beta"),
+                }
+                for mem_id, (vector, text, project) in data.items():
+                    await backend.upsert(
+                        id=mem_id,
+                        vector=vector,
+                        metadata={"text": text, "project": project, "timestamp": None, "type": "note"},
+                    )
+                assert await backend.count() == 3
+
+                hits = await backend.search([1.0, 0.0, 0.0, 0.0], top_k=3)
+                assert hits[0]["id"] == north
+                assert hits[0]["metadata"]["text"] == "north"
+                assert hits[0]["score"] > hits[1]["score"] > 0  # cosine ordering, real math
+
+                scoped = await backend.search(
+                    [1.0, 0.0, 0.0, 0.0], top_k=3, filter={"project": "alpha"}
+                )
+                assert {h["id"] for h in scoped} == {north, also}
+
+                await backend.delete(id=east)
+                assert await backend.count() == 2
+            finally:
+                await backend.clear()
+                await backend.disconnect()
+
+        asyncio.run(go())
