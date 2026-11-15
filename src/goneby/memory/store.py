@@ -1,8 +1,8 @@
 """MemoryStore — index walked entries into the vector backend and retrieve them.
 
 Owns the embedder lifecycle and the backend connection so the MCP tools stay
-thin. Stable IDs are derived from a content hash, which makes re-storing the
-same entry idempotent instead of duplicating it.
+thin. Stable IDs are derived from a project-scoped content hash, which makes
+re-storing the same entry idempotent instead of duplicating it.
 """
 
 from __future__ import annotations
@@ -17,9 +17,14 @@ from goneby.vector.base import VectorBackend
 logger = logging.getLogger(__name__)
 
 
-def content_id(text: str) -> str:
-    """Deterministic ID from content, so repeated stores upsert instead of duplicate."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+def content_id(project: str, text: str) -> str:
+    """Deterministic, project-scoped ID.
+
+    Same text re-stored within one project upserts (idempotent); the same
+    text in a *different* project is a different entry, so cross-project
+    overwrite can never make an entry unfindable in its own project.
+    """
+    return hashlib.sha256(f"{project}\x00{text}".encode()).hexdigest()[:32]
 
 
 class MemoryStore:
@@ -60,7 +65,7 @@ class MemoryStore:
             if not text:
                 skipped += 1
                 continue
-            indexable.append((content_id(text), text, entry.get("metadata") or {}))
+            indexable.append((content_id(self._project, text), text, entry.get("metadata") or {}))
 
         if not indexable:
             return {

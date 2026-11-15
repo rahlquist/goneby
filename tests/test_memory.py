@@ -422,7 +422,32 @@ class TestMemoryStore:
 
         run(go())
 
-    def test_content_id_is_deterministic_and_distinct(self):
-        assert content_id("abc") == content_id("abc")
-        assert content_id("abc") != content_id("abd")
-        assert len(content_id("abc")) == 32
+    def test_content_id_is_deterministic_and_project_scoped(self):
+        assert content_id("p", "abc") == content_id("p", "abc")
+        assert content_id("p", "abc") != content_id("p", "abd")
+        assert content_id("alpha", "abc") != content_id("beta", "abc")
+        assert len(content_id("p", "abc")) == 32
+
+    def test_same_text_in_two_projects_stays_findable(self):
+        """ctx-audit finding: text IDs without project scope let project beta
+        overwrite alpha's identical entry, making it unfindable in alpha."""
+
+        async def go():
+            async with ServerFixture() as srv:
+                emb = Embedder(EmbeddingConfig(base_url=srv.base_url, dimensions=64))
+                backend = MemBackend()
+                alpha = MemoryStore(emb, backend, project="alpha")
+                beta = MemoryStore(emb, backend, project="beta")
+                shared = [{"content": "deploy uses blue-green switches", "metadata": {}}]
+                await alpha.index_entries(shared)
+                await beta.index_entries(shared)
+                assert len(backend.data) == 2  # two distinct entries, not one overwritten
+                hit = await alpha.search("blue-green", scope="project")
+                assert hit["count"] == 1
+                assert hit["results"][0]["project"] == "alpha"
+                hit_b = await beta.search("blue-green", scope="project")
+                assert hit_b["count"] == 1
+                assert hit_b["results"][0]["project"] == "beta"
+                await emb.aclose()
+
+        run(go())
