@@ -28,8 +28,9 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 # (ctx-audit hygiene: the option was misspelled 'importmode', so it never
-# applied and bare `pytest` could not collect tests/test_e2e.py.)
-import-mode = "importlib"
+# applied and bare `pytest` could not collect tests/test_e2e.py. import-mode
+# is a CLI option, not an ini key — it belongs in addopts.)
+addopts = ["--import-mode=importlib"]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [

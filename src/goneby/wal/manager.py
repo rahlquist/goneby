@@ -24,6 +24,37 @@ class WALManager:
         """Read all entries."""
         return self._reader.read_all()
 
+    def read_for_walk(self) -> tuple[list[dict], list[str]]:
+        """Entries safe to judge, plus integrity notes.
+
+        Markers ([CORRUPTED], [GAP]) and out-of-order lines never reach the
+        judge — a splice or tampered line must not get a model vote on it.
+        Unbound legacy entries ARE kept (accept-and-flag): excluding them
+        would silently lose history during migration.
+        """
+        clean: list[dict] = []
+        notes: list[str] = []
+        for entry in self.read_all():
+            md = entry.get("metadata") or {}
+            if md.get("corrupted"):
+                notes.append(entry.get("content") or "corrupted line")
+                continue
+            if md.get("gap"):
+                notes.append(entry.get("content") or "sequence gap")
+                continue
+            if md.get("out_of_order"):
+                notes.append(
+                    f"line at position {md.get('wal_seq')} is out of order; excluded"
+                )
+                continue
+            if md.get("integrity") == "unbound":
+                notes.append(
+                    f"unbound legacy entry kept (no position binding): "
+                    f"{entry.get('timestamp')}"
+                )
+            clean.append(entry)
+        return clean, notes
+
     def iter_entries(self):
         """Iterate over entries."""
         return self._reader.iter_entries()

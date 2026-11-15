@@ -208,7 +208,7 @@ def create_mcp_server(config: GoneByConfig | None = None):
         Returns:
             Walk results with kept entries and statistics.
         """
-        entries = wal.read_all()
+        entries, integrity_notes = wal.read_for_walk()
 
         if not entries:
             return {
@@ -235,6 +235,7 @@ def create_mcp_server(config: GoneByConfig | None = None):
             "discarded_count": result.discarded_count,
             "total_count": result.total_count,
             "dedup_count": result.dedup_count,
+            "wal_integrity_notes": integrity_notes,
             "kept_entries": result.kept_entries,
         }
 

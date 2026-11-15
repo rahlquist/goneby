@@ -6,6 +6,7 @@ Format per entry: nonce (12 bytes) || ciphertext || tag (16 bytes).
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -20,7 +21,17 @@ class Cipher:
     def __init__(self, key: bytes):
         if len(key) != KEY_SIZE:
             raise ValueError(f"Key must be {KEY_SIZE} bytes, got {len(key)}")
+        self._key = key
         self._cipher = ChaCha20Poly1305(key)
+
+    @property
+    def key_id(self) -> str:
+        """Non-reversible key fingerprint (ctx-audit: keys had no identity).
+
+        Lets a WAL say which key it belongs to, so a wrong-key read reports
+        'wrong key' instead of generic corruption — and future rotation can
+        tell keys apart. 16 hex chars of SHA-256 of the key."""
+        return hashlib.sha256(self._key).hexdigest()[:16]
 
     @staticmethod
     def generate_key() -> bytes:

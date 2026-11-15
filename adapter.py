@@ -848,7 +848,7 @@ class GoneByPlugin:
 
         try:
             project, _root, _allowed = self._capture_verdict(kwargs)
-            entries = self._get_wal(project).read_all()
+            entries, integrity_notes = self._get_wal(project).read_for_walk()
             if not entries:
                 return json.dumps(
                     {"status": "empty", "kept_count": 0, "kept_entries": []}
@@ -875,6 +875,7 @@ class GoneByPlugin:
                     "total_count": result.total_count,
                     "dedup_count": result.dedup_count,
                     "judge_fallback_batches": self._judge_fallback_batches,
+                    "wal_integrity_notes": integrity_notes,
                     "kept_entries": result.kept_entries,
                 }
             )
