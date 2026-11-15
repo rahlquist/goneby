@@ -221,6 +221,32 @@ class TestJudgeFailOpenSemantics:
         assert result["judge_fallback_batches"] == 1
 
 
+class TestCaptureGate:
+    """ctx-audit: the master switch promised to apply everywhere, but
+    wall_append computed the capture verdict and then discarded it."""
+
+    def test_wall_append_blocked_when_master_off(self, monkeypatch, tmp_path):
+        _plugin, ctx = make_plugin(monkeypatch, tmp_path, GONEBY_AUTO_CAPTURE="0")
+        handler = ctx.tools["wall_append"]["handler"]
+        result = json.loads(
+            handler({"content": "should not land", "entry_type": "note"}, session_id="s1")
+        )
+        assert result["status"] == "blocked"
+        assert "capture" in result["reason"]
+        # Nothing reached the WAL...
+        read = json.loads(ctx.tools["wall_read"]["handler"]({}, session_id="s1"))
+        assert read["count"] == 0
+        # ...but reading the gate-off state must keep working (it is capture, not access).
+
+    def test_wall_append_ok_when_master_on(self, monkeypatch, tmp_path):
+        _plugin, ctx = make_plugin(monkeypatch, tmp_path)
+        handler = ctx.tools["wall_append"]["handler"]
+        result = json.loads(
+            handler({"content": "lands", "entry_type": "note"}, session_id="s1")
+        )
+        assert result["status"] == "ok"
+
+
 class TestCatalogReviewFixes:
     """Regressions requested by the Hermes catalog review (PR #153868)."""
 

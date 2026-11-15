@@ -767,7 +767,15 @@ class GoneByPlugin:
             )
 
         try:
-            project, _root, _allowed = self._capture_verdict(kwargs)
+            project, _root, allowed = self._capture_verdict(kwargs)
+            if not allowed:
+                return json.dumps(
+                    {
+                        "status": "blocked",
+                        "reason": "capture disabled (master switch or project policy)",
+                        "project": project,
+                    }
+                )
             wal = self._get_wal(project)
             with self._lock:
                 wal.append(content, {"type": entry_type})
