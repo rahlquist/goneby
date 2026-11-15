@@ -48,6 +48,98 @@ def _new_key() -> bytes:
     return Cipher.generate_key()
 
 
+class TestLLMProviderConfig:
+    """ctx-audit: the MCP server hardcoded the Anthropic interface with one
+    fixed model, and the package was not a declared dependency — a fresh
+    install could not walk, and the 'no provider hard-coded' promise was
+    false. Provider must come from config; unset must be an actionable
+    error, not an ImportError."""
+
+    def test_walk_without_llm_config_returns_actionable_error(self, tmp_path):
+        server, _ = make_server(tmp_path)
+        run(server.call_tool("wall_append", {"content": "a log line"}))
+        out = payload(run(server.call_tool("walk_backward", {"mvp_text": "mvp"})))
+        assert out["status"] == "error"
+        assert out["stage"] == "judge"
+        assert "GONEBY_LLM_BASE_URL" in out["error"]
+
+    def test_no_vendor_or_model_default(self):
+        cfg = GoneByConfig()
+        assert cfg.llm_model == ""
+        assert cfg.llm_provider != "anthropic"
+
+    def test_openai_compat_endpoint_receives_prompt(self):
+        import asyncio
+        import socket
+
+        import uvicorn
+        from fastapi import FastAPI
+
+        from goneby.mcp_server import create_llm_fn
+
+        received: dict = {}
+        app = FastAPI()
+
+        @app.post("/v1/chat/completions")
+        async def chat(body: dict):
+            received["payload"] = body
+            return {"choices": [{"message": {"content": "[true, false]"}}]}
+
+        async def go():
+            sock = socket.socket()
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            sock.close()
+            ucfg = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+            srv = uvicorn.Server(ucfg)
+            task = asyncio.create_task(srv.serve())
+            for _ in range(100):
+                if srv.started:
+                    break
+                await asyncio.sleep(0.05)
+            try:
+                cfg = GoneByConfig(
+                    llm_base_url=f"http://127.0.0.1:{port}/v1",
+                    llm_model="test-judge",
+                    llm_api_key="k",
+                )
+                out = await create_llm_fn(cfg)("judge this")
+                assert out == "[true, false]"
+                assert received["payload"]["model"] == "test-judge"
+                assert received["payload"]["messages"][0]["content"] == "judge this"
+            finally:
+                srv.should_exit = True
+                await task
+
+        run(go())
+
+    def test_anthropic_requires_declared_extra(self):
+        from pathlib import Path
+        from tomllib import loads as toml_loads
+
+        data = toml_loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+        assert "anthropic" in data["project"]["optional-dependencies"], (
+            "provider may be opt-in, but the dependency must be declared"
+        )
+
+    def test_anthropic_path_names_the_extra_when_missing(self):
+        try:
+            import anthropic  # noqa: F401
+
+            pytest.skip("anthropic installed in this env; ImportError path unreachable")
+        except ImportError:
+            pass
+        from goneby.mcp_server import create_llm_fn
+
+        cfg = GoneByConfig(llm_provider="anthropic", llm_model="claude-x")
+
+        async def go():
+            with pytest.raises(RuntimeError, match=r"goneby\[anthropic\]"):
+                await create_llm_fn(cfg)("p")
+
+        run(go())
+
+
 class TestServerConstruction:
     def test_server_class_loads(self):
         assert load_mcp_server_class().__name__ in {"MCPServer", "FastMCP"}

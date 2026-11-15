@@ -63,6 +63,16 @@ class GoneByConfig:
     embedding_dimensions: int = 512  # MRL truncation target
     embedding_batch_size: int = 16
 
+    # Judge LLM for the backward walk (ctx-audit: nothing provider-hardcoded).
+    # "openai" = any OpenAI-compatible /chat/completions server at llm_base_url;
+    # "anthropic" = opt-in extra (pip install 'goneby[anthropic]').
+    # An empty llm_model makes walk_backward return a config error, never a
+    # silent vendor choice.
+    llm_provider: str = "openai"
+    llm_base_url: str = ""
+    llm_api_key: str | None = None
+    llm_model: str = ""
+
     @classmethod
     def from_env(cls, env=None) -> GoneByConfig:
         """Load configuration from environment variables.
@@ -106,6 +116,10 @@ class GoneByConfig:
             embedding_api_key=_s("GONEBY_EMBEDDING_API_KEY", "") or None,
             embedding_dimensions=int(_s("GONEBY_EMBEDDING_DIMENSIONS", "512")),
             embedding_batch_size=int(_s("GONEBY_EMBEDDING_BATCH_SIZE", "16")),
+            llm_provider=_s("GONEBY_LLM_PROVIDER", "openai"),
+            llm_base_url=_s("GONEBY_LLM_BASE_URL", ""),
+            llm_api_key=_s("GONEBY_LLM_API_KEY", "") or None,
+            llm_model=_s("GONEBY_LLM_MODEL", ""),
         )
 
     def validate(self) -> list[str]:

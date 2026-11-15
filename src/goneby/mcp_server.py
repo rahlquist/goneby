@@ -38,6 +38,76 @@ def load_mcp_server_class():
         ) from exc
 
 
+LLM_NOT_CONFIGURED = (
+    "No judge LLM configured for the backward walk. Set GONEBY_LLM_BASE_URL "
+    "and GONEBY_LLM_MODEL (plus GONEBY_LLM_API_KEY if required) to any "
+    "OpenAI-compatible /chat/completions server, or GONEBY_LLM_PROVIDER="
+    "anthropic with pip install 'goneby[anthropic]'."
+)
+
+
+async def _call_openai_compat(config: GoneByConfig, prompt: str) -> str:
+    import httpx
+
+    url = config.llm_base_url.rstrip("/") + "/chat/completions"
+    headers = {}
+    if config.llm_api_key:
+        headers["Authorization"] = f"Bearer {config.llm_api_key}"
+    payload = {
+        "model": config.llm_model,
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+
+async def _call_anthropic(config: GoneByConfig, prompt: str) -> str:
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError as exc:
+        raise RuntimeError(
+            "GONEBY_LLM_PROVIDER=anthropic requires pip install 'goneby[anthropic]'"
+        ) from exc
+    if not config.llm_model:
+        raise RuntimeError(LLM_NOT_CONFIGURED)
+    client = AsyncAnthropic(api_key=config.llm_api_key)
+    response = await client.messages.create(
+        model=config.llm_model,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    # Responses can interleave thinking/tool blocks — collect only text.
+    return "".join(
+        block.text for block in response.content if getattr(block, "type", "") == "text"
+    )
+
+
+def create_llm_fn(config: GoneByConfig):
+    """Build the judge's LLM callable from configuration.
+
+    No vendor, model, or API key is defaulted (ctx-audit: the MCP server used
+    to call Anthropic with a hard-coded model whose package was not even
+    declared as a dependency — a fresh install could not walk at all).
+    """
+
+    async def llm_fn(prompt: str) -> str:
+        if config.llm_provider == "anthropic":
+            return await _call_anthropic(config, prompt)
+        if config.llm_provider != "openai":
+            raise RuntimeError(
+                f"Unknown GONEBY_LLM_PROVIDER {config.llm_provider!r}; "
+                "expected 'openai' (OpenAI-compatible) or 'anthropic'."
+            )
+        if not config.llm_base_url or not config.llm_model:
+            raise RuntimeError(LLM_NOT_CONFIGURED)
+        return await _call_openai_compat(config, prompt)
+
+    return llm_fn
+
+
 def create_mcp_server(config: GoneByConfig | None = None):
     """Create and configure the GoneBy MCP server.
 
@@ -71,24 +141,8 @@ def create_mcp_server(config: GoneByConfig | None = None):
     )
     store = MemoryStore(embedder, backend, project=config.project)
 
-    # LLM function for backward walk (uses Anthropic by default)
-    async def llm_fn(prompt: str) -> str:
-        """Call LLM for backward walk judgment."""
-        try:
-            from anthropic import AsyncAnthropic
-
-            client = AsyncAnthropic()
-            response = await client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.content[0].text
-        except ImportError:
-            raise RuntimeError(
-                "LLM support requires the 'anthropic' package. "
-                "Install with: pip install anthropic"
-            )
+    # Judge LLM for the backward walk — configured, never a hardcoded vendor.
+    llm_fn = create_llm_fn(config)
 
     judge = LLMJudge(llm_fn)
     walker = BackwardWalker(judge.judge)
@@ -164,7 +218,16 @@ def create_mcp_server(config: GoneByConfig | None = None):
                 "discarded_count": 0,
             }
 
-        result = await walker.walk(mvp_text, entries)
+        try:
+            result = await walker.walk(mvp_text, entries)
+        except Exception as exc:  # noqa: BLE001 - tool must not crash the server
+            return {
+                "status": "error",
+                "stage": "judge",
+                "error": str(exc),
+                "kept_count": 0,
+                "discarded_count": 0,
+            }
 
         return {
             "status": "ok",
