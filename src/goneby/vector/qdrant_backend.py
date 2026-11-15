@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import uuid
 from typing import Any
 
 from goneby.vector.base import VectorBackend
@@ -10,6 +12,31 @@ from goneby.vector.filtering import matches_filter
 
 class QdrantBackend(VectorBackend):
     """Qdrant vector backend using qdrant-client."""
+
+    @staticmethod
+    def _point_id(memory_id: str) -> str:
+        """Qdrant point IDs must be unsigned ints or UUIDs.
+
+        Live-server verified: hex32 content IDs pass as simple-form UUIDs,
+        so usable IDs are kept verbatim (debuggable, stable across a mapping
+        change). Anything else maps deterministically to UUIDv5. Pure-digit
+        strings longer than u64 range would overflow, so those are UUIDv5'd
+        too. (The removed .search() call was the visible ctx-audit defect;
+        non-UUID string IDs — 'north' — are rejected outright by the server.)
+        """
+        text = str(memory_id)
+        if text.isdigit() and len(text) <= 20 and int(text) < 2**64:
+            return text
+        try:
+            parsed = uuid.UUID(text)
+        except ValueError:
+            pass
+        else:
+            if str(parsed) == text or "-" in text:  # canonical/hyphenated form
+                return text
+            if re.fullmatch(r"[0-9a-fA-F]{32}", text):  # simple hex form: server-accepted
+                return text
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"goneby:{text}"))
 
     def __init__(
         self,
@@ -60,9 +87,10 @@ class QdrantBackend(VectorBackend):
             collection_name=self._collection,
             points=[
                 PointStruct(
-                    id=id,
+                    id=self._point_id(id),
                     vector=vector,
-                    payload=metadata,
+                    # keep the GoneBy-side ID recoverable across the UUID map
+                    payload={**metadata, "_goneby_id": str(id)},
                 )
             ],
         )
@@ -95,19 +123,23 @@ class QdrantBackend(VectorBackend):
             if must:
                 query_filter = Filter(must=must)
 
-        results = await self._client.search(
+        # qdrant-client >=1.7 removed the legacy .search() — this used to call
+        # it and crashed every query with the pinned client (ctx-audit).
+        results = await self._client.query_points(
             collection_name=self._collection,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k,
             query_filter=query_filter,
+            with_payload=True,
         )
 
         out = []
-        for r in results:
-            metadata = r.payload or {}
+        for r in results.points:
+            metadata = dict(r.payload or {})
+            memory_id = metadata.pop("_goneby_id", str(r.id))
             if filter and not matches_filter(metadata, filter):
                 continue
-            out.append({"id": str(r.id), "score": r.score, "metadata": metadata})
+            out.append({"id": memory_id, "score": r.score, "metadata": metadata})
         return out
 
     async def delete(self, id: str) -> None:
@@ -119,7 +151,7 @@ class QdrantBackend(VectorBackend):
 
         await self._client.delete(
             collection_name=self._collection,
-            points_selector=PointIdsList(points=[id]),
+            points_selector=PointIdsList(points=[self._point_id(id)]),
         )
 
     async def clear(self) -> None:
