@@ -10,6 +10,7 @@ The algorithm:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -110,10 +111,11 @@ class BackwardWalker:
 
     @staticmethod
     def _content_hash(content: str) -> str:
-        """Generate a simple hash for deduplication."""
-        # Normalize whitespace and lowercase for dedup
+        """Stable dedup hash: normalized SHA-256. (Builtin hash() is salted
+        per process by PYTHONHASHSEED — identical text hashed differently
+        across runs, so dedup state could never persist; ctx-audit adjacent.)"""
         normalized = re.sub(r"\s+", " ", content.strip().lower())
-        return str(hash(normalized))
+        return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 class LLMJudge:

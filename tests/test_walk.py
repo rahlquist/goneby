@@ -158,3 +158,31 @@ class TestLLMJudge:
 
         import asyncio
         asyncio.run(run())
+
+
+class TestContentHashStability:
+    """ctx-audit (adjacent): dedup hashed with builtin hash(), which is
+    salted per interpreter run (PYTHONHASHSEED) — identical text gets a
+    different hash across processes, so nothing dedup-related can persist."""
+
+    def test_content_hash_is_stable_across_processes(self):
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        code = (
+            "from goneby.walk.backward import BackwardWalker;"
+            "print(BackwardWalker._content_hash('Deploy  uses Blue-Green.'))"
+        )
+        root = str(Path(__file__).resolve().parents[1])
+        outs = []
+        for seed in ("1", "2"):
+            env = {**os.environ, "PYTHONHASHSEED": seed}
+            r = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True, text=True, env=env, cwd=root, check=False,
+            )
+            assert r.returncode == 0, r.stderr
+            outs.append(r.stdout.strip())
+        assert outs[0] == outs[1], f"content hash not deterministic across seeds: {outs}"
