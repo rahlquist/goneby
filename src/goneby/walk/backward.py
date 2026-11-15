@@ -111,11 +111,19 @@ class BackwardWalker:
 
     @staticmethod
     def _content_hash(content: str) -> str:
-        """Stable dedup hash: normalized SHA-256. (Builtin hash() is salted
+        """Stable dedup hash: lowercased, whitespace-collapsed, trailing
+        sentence punctuation stripped, SHA-256'd. (Builtin hash() is salted
         per process by PYTHONHASHSEED — identical text hashed differently
         across runs, so dedup state could never persist; ctx-audit adjacent.)"""
         normalized = re.sub(r"\s+", " ", content.strip().lower())
+        normalized = normalized.strip(DEDUP_TRAILING_PUNCT)
         return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+#: Trailing sentence punctuation stripped before dedup hashing (light
+#: normalization only — semantic near-duplicates are NOT merged; the docs
+#: must not claim more than this, ctx-audit row 'similar entries merged').
+DEDUP_TRAILING_PUNCT = ".!?,;:。，！？；："
 
 
 class LLMJudge:

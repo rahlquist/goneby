@@ -165,6 +165,20 @@ class TestContentHashStability:
     salted per interpreter run (PYTHONHASHSEED) — identical text gets a
     different hash across processes, so nothing dedup-related can persist."""
 
+    def test_trailing_punctuation_does_not_split_entries(self):
+        """ctx-audit: the docs promised similar entries merge, but one
+        trailing full stop was enough to keep two copies."""
+        base = BackwardWalker._content_hash("Deploy uses blue-green")
+        for variant in (
+            "Deploy uses blue-green.",
+            "Deploy uses blue-green!",
+            "Deploy uses blue-green?",
+            "Deploy uses blue-green。",
+            "deploy uses  blue-green",
+        ):
+            assert BackwardWalker._content_hash(variant) == base, variant
+        assert BackwardWalker._content_hash("Deploy uses blue green") != base
+
     def test_content_hash_is_stable_across_processes(self):
         import os
         import subprocess
