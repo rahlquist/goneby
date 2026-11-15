@@ -13,7 +13,7 @@ description: >-
 maintainer: rahlquist
 tier: community
 category: memory
-version: "1.0.0"
+version: "1.1.0"
 requires_hermes: ">=0.23.0"
 docs_url: https://github.com/rahlquist/goneby/blob/main/docs/OVERVIEW.md
 image: https://raw.githubusercontent.com/rahlquist/goneby/0ca52ac083fa0398b05532868f72196735c4279d/docs/gallery/banner.jpg
