@@ -33,7 +33,13 @@ class ValkeyBackend(VectorBackend):
     async def disconnect(self) -> None:
         """Close Valkey connection."""
         if self._client:
-            await self._client.close()
+            # valkey-py >=5.0.1 deprecates close(); aclose() is the coroutine
+            # form in every version this project pins (>=6).
+            aclose = getattr(self._client, "aclose", None)
+            if aclose is not None:
+                await aclose()
+            else:
+                await self._client.close()
             self._client = None
 
     async def upsert(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
