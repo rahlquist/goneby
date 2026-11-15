@@ -67,8 +67,13 @@ class FakeCtx:
 
 
 def make_plugin(monkeypatch, tmp_path, ctx=None, **env) -> tuple:
-    """Build a plugin with a temp config and a fake Hermes context."""
-    monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", Cipher.generate_key().hex())
+    """Build a plugin with a temp config and a fake Hermes context.
+
+    Pass ``GONEBY_ENCRYPTION_KEY=`` to reuse a key across calls (simulates a
+    restart against the same WAL); default is a fresh key per call.
+    """
+    key = env.get("GONEBY_ENCRYPTION_KEY") or Cipher.generate_key().hex()
+    monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", key)
     monkeypatch.setenv("GONEBY_WAL_PATH", str(tmp_path / "wal"))
     monkeypatch.setenv("GONEBY_PROJECT", env.get("GONEBY_PROJECT", "test-proj"))
     monkeypatch.setenv("GONEBY_CONFIG_PATH", str(tmp_path / "goneby-config.json"))
@@ -247,6 +252,64 @@ class TestCaptureGate:
         assert result["status"] == "ok"
 
 
+class TestWalPathUnification:
+    """ctx-audit: the CLI default WAL dir is ~/.goneby/wal, but the plugin
+    silently rewrote it to hermes plugin-data — CLI writes landed in a file
+    no Hermes session ever read."""
+
+    def test_no_silent_plugin_data_rewrite(self, monkeypatch, tmp_path):
+        import adapter
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("GONEBY_DATA_DIR", raising=False)
+        monkeypatch.delenv("GONEBY_WAL_PATH", raising=False)
+        monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", Cipher.generate_key().hex())
+        monkeypatch.setattr(adapter, "_hermes_home", lambda: tmp_path / ".hermes")
+
+        plugin = adapter.GoneByPlugin(FakeCtx())
+        assert plugin._config.wal_path == tmp_path / ".goneby" / "wal", (
+            "plugin diverged from the CLI default — split-brain WAL"
+        )
+
+    def test_explicit_env_overrides_still_win(self, monkeypatch, tmp_path):
+        plugin, _ctx = make_plugin(monkeypatch, tmp_path, GONEBY_WAL_PATH=str(tmp_path / "elsewhere"))
+        assert plugin._config.wal_path == tmp_path / "elsewhere"
+
+    def test_data_dir_env_still_honored_for_profile_privacy(self, monkeypatch, tmp_path):
+        import adapter
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("GONEBY_DATA_DIR", str(tmp_path / "private"))
+        monkeypatch.delenv("GONEBY_WAL_PATH", raising=False)
+        monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", Cipher.generate_key().hex())
+        monkeypatch.setattr(adapter, "_hermes_home", lambda: tmp_path / ".hermes")
+
+        plugin = adapter.GoneByPlugin(FakeCtx())
+        assert plugin._config.wal_path == tmp_path / "private" / "wal"
+
+
+class TestRestartDedup:
+    """ctx-audit: the seen-message set was process-local. A fresh plugin
+    instance replaying the same history re-captured every message."""
+
+    @staticmethod
+    def _msgs():
+        return [
+            {"role": "user", "content": "alpha idea", "message_uid": "u1"},
+            {"role": "assistant", "content": "did beta", "message_uid": "u2"},
+        ]
+
+    def test_fresh_instance_does_not_recapture(self, monkeypatch, tmp_path):
+        key = Cipher.generate_key().hex()
+        p1, _ = make_plugin(monkeypatch, tmp_path, GONEBY_ENCRYPTION_KEY=key)
+        assert p1._capture(self._msgs(), project="test-proj") == 2
+        p2, _ = make_plugin(monkeypatch, tmp_path, GONEBY_ENCRYPTION_KEY=key)
+        appended = p2._capture(
+            [*self._msgs(), {"role": "user", "content": "new gamma"}], project="test-proj"
+        )
+        assert appended == 1, f"restart re-captured {appended - 1} already-logged message(s)"
+
+
 class TestCatalogReviewFixes:
     """Regressions requested by the Hermes catalog review (PR #153868)."""
 
@@ -266,23 +329,29 @@ class TestCatalogReviewFixes:
 
         assert _ScopedEnv().get("GONEBY_ENCRYPTION_KEY", "") == ""
 
-    def test_data_paths_are_profile_scoped(self, monkeypatch, tmp_path):
+    def test_data_paths_default_to_cli_dir_not_profile_private(self, monkeypatch, tmp_path):
+        """ctx-audit: the old silent rewrite to <hermes-home>/plugin-data
+        meant the CLI wrote a WAL no Hermes session read. The default is now
+        the shared ~/.goneby; per-profile privacy is explicit GONEBY_DATA_DIR
+        (tested in TestWalPathUnification)."""
         import sys
         import types
 
         from adapter import GoneByPlugin
 
-        home = tmp_path / "profile-home"
+        fake_home = tmp_path / "profile-home"
+        real_home = tmp_path / "real-home"
+        monkeypatch.setenv("HOME", str(real_home))
         hc = types.ModuleType("hermes_constants")
-        hc.get_hermes_home = lambda: home
+        hc.get_hermes_home = lambda: fake_home
         monkeypatch.setitem(sys.modules, "hermes_constants", hc)
         for var in ("GONEBY_WAL_PATH", "GONEBY_CONFIG_PATH", "GONEBY_DATA_DIR"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("GONEBY_ENCRYPTION_KEY", "aa" * 32)
 
         plugin = GoneByPlugin(FakeCtx())
-        assert plugin._config.wal_path == home / "plugin-data" / "goneby" / "wal"
-        assert plugin._config_path == home / "plugin-data" / "goneby" / "config.json"
+        assert plugin._config.wal_path == real_home / ".goneby" / "wal"
+        assert plugin._config_path == real_home / ".goneby" / "config.json"
 
 
     def test_explicit_wal_override_wins(self, monkeypatch, tmp_path):

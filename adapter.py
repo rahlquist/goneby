@@ -144,6 +144,7 @@ class GoneByPlugin:
         self._ctx = ctx
         self._lock = threading.RLock()
         self._seen: set[str] = set()
+        self._seeded_wals: set[Path] = set()
         self._judge_fallback_batches = 0
         self._loop: Any = None
         self._loop_thread: threading.Thread | None = None
@@ -153,16 +154,14 @@ class GoneByPlugin:
         self._scoped_env = _ScopedEnv()
         self._config = GoneByConfig.from_env(self._scoped_env)
 
-        # Hermes installs keep per-profile data per profile: default the WAL
-        # and policy file under get_hermes_home()/plugin-data/goneby so two
-        # profiles never share one transcript log. Explicit env overrides win;
-        # outside Hermes (CLI/MCP/tests) the standalone ~/.goneby default stays.
-        home = _hermes_home()
+        # One WAL for all frontends (ctx-audit: the CLI wrote ~/.goneby/wal
+        # while the plugin silently rewrote the path to plugin-data, so
+        # neither side ever saw the other's entries). Default is the packaged
+        # ~/.goneby; set GONEBY_DATA_DIR for a profile-private store, or
+        # GONEBY_WAL_PATH to relocate outright.
         data_env = self._env("GONEBY_DATA_DIR", "").strip()
         if data_env:
             self._data_dir = Path(data_env).expanduser()
-        elif home is not None:
-            self._data_dir = home / "plugin-data" / "goneby"
         else:
             self._data_dir = Path("~/.goneby").expanduser()
         if not self._env("GONEBY_WAL_PATH", "").strip():
@@ -603,6 +602,40 @@ class GoneByPlugin:
     # Capture
     # ------------------------------------------------------------------
 
+    #: Cap for dedup seeding from an existing WAL (entries per file).
+    DEDUP_SEED_MAX_ENTRIES = 10_000
+
+    def _seed_seen_from_wal(self, wal) -> None:
+        """Load already-captured message identities out of a WAL once per file.
+
+        ``_seen`` alone lives for one process, so a restart with the same
+        transcript re-logged everything (ctx-audit: 'recording without
+        duplicates'). Seeding is best-effort: a read error must never block
+        capture; we just proceed without history.
+        """
+        try:
+            path = wal.path
+        except Exception:  # noqa: BLE001 - exotic WAL stand-ins in tests
+            return
+        if path in self._seeded_wals:
+            return
+        self._seeded_wals.add(path)
+        try:
+            entries = wal.read_all()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("goneby: dedup seed read failed (%s); capturing without history", exc)
+            return
+        for entry in entries[-self.DEDUP_SEED_MAX_ENTRIES :]:
+            md = entry.get("metadata") or {}
+            if md.get("corrupted"):
+                continue
+            identity = md.get("identity")
+            if not identity:
+                text = entry.get("content", "") or ""
+                role = md.get("role", "")
+                identity = f"hash:{role}:{hashlib.sha256(text.encode()).hexdigest()[:24]}"
+            self._seen.add(identity)
+
     def _capture(self, conversation_history: list, wal=None, project: str | None = None) -> int:
         """Append unseen messages to the WAL. Returns count appended.
 
@@ -615,6 +648,7 @@ class GoneByPlugin:
         try:
             wal = wal or self._get_wal(project)
             with self._lock:
+                self._seed_seen_from_wal(wal)
                 for message in conversation_history:
                     if not isinstance(message, dict):
                         continue
@@ -629,7 +663,7 @@ class GoneByPlugin:
                     if identity in self._seen:
                         continue
                     self._seen.add(identity)
-                    wal.append(text, {"type": "note", "role": role})
+                    wal.append(text, {"type": "note", "role": role, "identity": identity})
                     appended += 1
         except Exception as exc:  # noqa: BLE001 - capture must never break a turn
             logger.warning("goneby: capture failed — %s", exc)
