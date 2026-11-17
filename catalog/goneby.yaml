@@ -1,6 +1,6 @@
 name: goneby
 repo: https://github.com/rahlquist/goneby
-sha: 6992935bf156ad44424518462b52d1ac4aec9107            # full 40-hex of the catalog-ready main commit (v1.1.0 ctx-audit)
+sha: 99a7099b8004f1be2e4c99929c161750f47f452f            # full 40-hex of the catalog-ready main commit (v1.1.1 profile-isolation fix)
 title: GoneBy
 description: >-
   Retroactive project memory for LLM agents. Captures every turn into an
@@ -13,15 +13,15 @@ description: >-
 maintainer: rahlquist
 tier: community
 category: memory
-version: "1.1.0"
+version: "1.1.1"
 requires_hermes: ">=0.23.0"
 docs_url: https://github.com/rahlquist/goneby/blob/main/docs/OVERVIEW.md
-image: https://raw.githubusercontent.com/rahlquist/goneby/6992935bf156ad44424518462b52d1ac4aec9107/docs/gallery/banner.jpg
+image: https://raw.githubusercontent.com/rahlquist/goneby/99a7099b8004f1be2e4c99929c161750f47f452f/docs/gallery/banner.jpg
 screenshots:
-  - https://raw.githubusercontent.com/rahlquist/goneby/6992935bf156ad44424518462b52d1ac4aec9107/docs/gallery/screenshot-tape.png
-  - https://raw.githubusercontent.com/rahlquist/goneby/6992935bf156ad44424518462b52d1ac4aec9107/docs/gallery/screenshot-verification.png
-  - https://raw.githubusercontent.com/rahlquist/goneby/6992935bf156ad44424518462b52d1ac4aec9107/docs/gallery/screenshot-retrieve.png
-  - https://raw.githubusercontent.com/rahlquist/goneby/6992935bf156ad44424518462b52d1ac4aec9107/docs/gallery/screenshot-endcard.png
+  - https://raw.githubusercontent.com/rahlquist/goneby/99a7099b8004f1be2e4c99929c161750f47f452f/docs/gallery/screenshot-tape.png
+  - https://raw.githubusercontent.com/rahlquist/goneby/99a7099b8004f1be2e4c99929c161750f47f452f/docs/gallery/screenshot-verification.png
+  - https://raw.githubusercontent.com/rahlquist/goneby/99a7099b8004f1be2e4c99929c161750f47f452f/docs/gallery/screenshot-retrieve.png
+  - https://raw.githubusercontent.com/rahlquist/goneby/99a7099b8004f1be2e4c99929c161750f47f452f/docs/gallery/screenshot-endcard.png
 readme: true
 platforms: [linux, macos]
 capabilities:
