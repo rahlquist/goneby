@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# migrate_wal.sh — move GoneBy runtime data to the shared 1.1.0 default.
+# migrate_wal.sh — move GoneBy runtime data to the per-profile store.
 #
-# ctx-audit: before v1.1 the Hermes plugin wrote <hermes-home>/plugin-data/goneby
-# while the CLI wrote ~/.goneby. v1.1 unifies on ~/.goneby. This script copies
-# (never deletes) the old store so both frontends see one history.
+# v1.1.0 pointed every frontend at the shared ~/.goneby. The Hermes catalog
+# review (PR #155972) reverted the plugin to <hermes-home>/plugin-data/goneby
+# — profiles are kept apart on purpose — so a v1.1.0 store needs carrying
+# across. This script copies (never deletes) the old store, so both locations
+# stay readable and the move is reversible.
 #
 # DRY-RUN IS THE DEFAULT. Review the plan, then run with --apply.
 # Stop the Hermes gateway first: an append landing mid-copy would be lost.
@@ -19,8 +21,8 @@ if [ "${1:-}" = "--apply" ]; then
   shift
 fi
 
-OLD_DIR="${1:-$HOME/.hermes/plugin-data/goneby}"
-NEW_DIR="${GONEBY_DATA_DIR:-$HOME/.goneby}"
+OLD_DIR="${1:-${GONEBY_DATA_DIR:-$HOME/.goneby}}"
+NEW_DIR="${HERMES_HOME:-$HOME/.hermes}/plugin-data/goneby"
 
 say() { printf '%s\n' "$*"; }
 [ "$APPLY" = 1 ] || say "DRY-RUN (nothing copied; rerun with --apply)"

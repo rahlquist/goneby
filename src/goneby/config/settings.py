@@ -8,6 +8,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def default_data_dir(env=None) -> Path:
+    """The GoneBy data directory — WAL base plus the policy file.
+
+    ``GONEBY_DATA_DIR`` is the explicit opt-in to one shared store. Otherwise a
+    Hermes profile (``HERMES_HOME`` set) keeps its store under that profile's
+    ``plugin-data/goneby``; the standalone CLI/MCP falls back to the shared
+    ``~/.goneby``. ``env`` is injectable so the plugin can resolve through its
+    profile-scoped reader.
+    """
+    source = os.environ if env is None else env
+
+    def _read(name: str) -> str:
+        return str(source.get(name, "")).strip()
+
+    explicit = _read("GONEBY_DATA_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    home = _read("HERMES_HOME")
+    if home:
+        return Path(home).expanduser() / "plugin-data" / "goneby"
+    return Path("~/.goneby").expanduser()
+
+
 def project_wal_path(base: Path, project: str) -> Path:
     """Per-project WAL path.
 
@@ -38,7 +61,7 @@ class GoneByConfig:
     encryption_key: bytes = field(default=b"")
 
     # WAL storage
-    wal_path: Path = field(default=Path("~/.goneby/wal").expanduser())
+    wal_path: Path = field(default_factory=lambda: default_data_dir() / "wal")
 
     # Vector backend: "valkey" or "qdrant"
     vector_backend: str = "valkey"
@@ -98,7 +121,7 @@ class GoneByConfig:
 
         return cls(
             encryption_key=key,
-            wal_path=Path(_s("GONEBY_WAL_PATH", "~/.goneby/wal")).expanduser(),
+            wal_path=Path(_s("GONEBY_WAL_PATH", str(default_data_dir(env) / "wal"))).expanduser(),
             vector_backend=_s("GONEBY_VECTOR_BACKEND", "valkey"),
             project=_s("GONEBY_PROJECT", "default"),
             valkey_host=_s("GONEBY_VALKEY_HOST", "localhost"),

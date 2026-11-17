@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.1 — 2026-11-17 — profile isolation restored
+
+The Hermes catalog review (NousResearch/hermes-agent#155972) found a
+regression against the 1.0.0 listing: v1.1.0 moved the Hermes plugin's data
+dir to a shared `~/.goneby`, so two profiles working the same project append
+to — and walk — the same log, and one profile's transcript ends up in
+another's recall. Hermes profiles are kept apart on purpose.
+
+### Fixed
+- **Profile isolation is the plugin default again.** Under Hermes the store is
+  `<hermes-home>/plugin-data/goneby` (WAL and policy file), one per profile.
+  `GONEBY_DATA_DIR` is the explicit opt-in to a single shared store.
+- **The CLI and MCP server resolve the store the same way.** `~/.goneby`
+  remains their standalone default; `HERMES_HOME` selects the profile store
+  and `GONEBY_DATA_DIR` overrides both — so a CLI run inside a profile shares
+  that profile's log instead of splitting it.
+- **`scripts/migrate_wal.sh` now carries a v1.1.0 store to the profile store**
+  (`~/.goneby` → `${HERMES_HOME:-$HOME/.hermes}/plugin-data/goneby`), still
+  dry-run by default, sha256-verified, non-destructive. v1.0.0 hosts need no
+  migration: their store is already in the restored location.
+
+Tests: `TestWalPathProfileIsolation` (5) and `TestDefaultDataDir` (4) replace
+the unification tests that asserted the shared default.
+
 ## 1.1.0 — 2026-11-14 — the ctx-audit release
 
 The comparison page "ctx und GoneBy" (gottz.de/ctx-vs-goneby.html, by the

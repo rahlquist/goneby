@@ -10,13 +10,15 @@ Four knobs, evaluated in a fixed order (see `capture_allowed`):
    captures, regardless of project state.
 3. **per-project marker** — ``.goneby.json`` in the project root. Team
    opt-in/opt-out that travels with the repo.
-4. **user-level override** — ``~/.goneby/config.json`` ``projects`` map:
+4. **user-level override** — ``<data-dir>/config.json`` ``projects`` map:
    personal, works on repos you don't own and can't write into.
 5. **mode** — ``all`` (default: capture everything not excluded above) or
    ``opt-in`` (capture only projects explicitly enabled).
 
-Everything persists in ``~/.goneby/config.json`` (override with
+Everything persists in ``<data-dir>/config.json`` (override with
 ``GONEBY_CONFIG_PATH``); the env vars remain process-scoped fallbacks.
+``<data-dir>`` is ``$HERMES_HOME/plugin-data/goneby`` under a Hermes profile
+(``~/.goneby`` for the standalone CLI/MCP; ``GONEBY_DATA_DIR`` overrides).
 """
 
 from __future__ import annotations
@@ -37,7 +39,9 @@ def default_config_path() -> Path:
     override = os.environ.get("GONEBY_CONFIG_PATH", "")
     if override:
         return Path(override).expanduser()
-    return Path("~/.goneby/config.json").expanduser()
+    from goneby.config.settings import default_data_dir
+
+    return default_data_dir() / "config.json"
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:

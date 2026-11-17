@@ -35,7 +35,9 @@ Details that matter:
   payloads; without this the log fills with repeats.
 - **`system` and `tool` roles are skipped** — host scaffolding, not project
   memory, and tool output is most of transcript volume.
-- **One WAL per project** (`~/.goneby/wal/<project>.wal`). This is
+- **One WAL per project** (`<data-dir>/wal/<project>.wal`, where `<data-dir>`
+  is `<HERMES_HOME>/plugin-data/goneby` under a Hermes profile and
+  `~/.goneby` for the standalone CLI/MCP). This is
   load-bearing: a shared log would force every retrospective walk to judge
   project B's evidence against project A's product.
 
@@ -130,7 +132,7 @@ Two postures:
 - **`opt-in`** — capture nothing except projects explicitly enabled. This is
   the "disabled by default, enable per project" posture, one command away.
 
-Policy persists in `~/.goneby/config.json` (`GONEBY_CONFIG_PATH` relocates
+Policy persists in `<data-dir>/config.json` (`GONEBY_CONFIG_PATH` relocates
 it). `goneby_status` and `/goneby status` always show the *effective* verdict
 and the inputs that produced it.
 
@@ -170,7 +172,8 @@ Any OpenAI-compatible `/v1/embeddings` endpoint:
 | Var | Default | Notes |
 |---|---|---|
 | `GONEBY_ENCRYPTION_KEY` | **required** | 32-byte hex (`goneby generate-key`). Store in a vault. No copy in this repo, ever. |
-| `GONEBY_WAL_PATH` | `~/.goneby/wal` | directory base; files are `<project>.wal` |
+| `GONEBY_WAL_PATH` | `<data-dir>/wal` | directory base; files are `<project>.wal` |
+| `GONEBY_DATA_DIR` | `<HERMES_HOME>/plugin-data/goneby` under a profile, else `~/.goneby` | data dir for the WAL and policy file; the explicit shared-store opt-in |
 | `GONEBY_PROJECT` | `default` | fallback slug when no session context resolves |
 
 ### 3.6 Interfaces (same engine, four fronts)

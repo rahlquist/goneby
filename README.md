@@ -86,8 +86,9 @@ goneby serve
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GONEBY_ENCRYPTION_KEY` | (required) | 32-byte hex key for ChaCha20-Poly1305 |
-| `GONEBY_DATA_DIR` | `~/.goneby/` | Shared data dir (WAL + policy file) for CLI, MCP server, and Hermes plugin alike; set per profile to keep stores apart |
+| `GONEBY_DATA_DIR` | see below | Explicit data dir (WAL + policy file). Overrides the context default |
 | `GONEBY_WAL_PATH` | `<data-dir>/wal` | Encrypted WAL location |
+| `HERMES_HOME` | `~/.hermes` | Hermes profile home. Under a profile the data dir is `<HERMES_HOME>/plugin-data/goneby`; the standalone CLI/MCP falls back to `~/.goneby` |
 | `GONEBY_PROJECT` | `default` | Project namespace for stored memories |
 | `GONEBY_VECTOR_BACKEND` | `valkey` | `valkey` or `qdrant` |
 | `GONEBY_VALKEY_HOST` / `_PORT` / `_DB` | `localhost` / `6379` / `0` | Valkey connection |

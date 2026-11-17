@@ -215,3 +215,52 @@ class TestConfigWiring:
     def test_project_defaults_to_default(self, monkeypatch):
         monkeypatch.delenv("GONEBY_PROJECT", raising=False)
         assert GoneByConfig.from_env().project == "default"
+
+
+class TestDefaultDataDir:
+    """Catalog review (PR #155972): the CLI/MCP resolves the store by context.
+
+    ``GONEBY_DATA_DIR`` is the explicit shared-store opt-in; otherwise a
+    Hermes profile (``HERMES_HOME``) keeps its own plugin-data store, and a
+    standalone frontend falls back to ``~/.goneby``.
+    """
+
+    def test_standalone_defaults_to_home_goneby(self, monkeypatch, tmp_path):
+        from goneby.config.settings import default_data_dir
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("GONEBY_DATA_DIR", raising=False)
+
+        assert default_data_dir() == tmp_path / ".goneby"
+
+    def test_hermes_home_selects_the_profile_store(self, monkeypatch, tmp_path):
+        from goneby.config.settings import default_data_dir
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profile"))
+        monkeypatch.delenv("GONEBY_DATA_DIR", raising=False)
+
+        assert default_data_dir() == tmp_path / "profile" / "plugin-data" / "goneby"
+
+    def test_explicit_data_dir_wins_over_hermes_home(self, monkeypatch, tmp_path):
+        from goneby.config.settings import default_data_dir
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profile"))
+        monkeypatch.setenv("GONEBY_DATA_DIR", str(tmp_path / "shared"))
+
+        assert default_data_dir() == tmp_path / "shared"
+
+    def test_config_wal_and_policy_follow_the_data_dir(self, monkeypatch, tmp_path):
+        from goneby.config.policy import default_config_path
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profile"))
+        monkeypatch.delenv("GONEBY_WAL_PATH", raising=False)
+        monkeypatch.delenv("GONEBY_CONFIG_PATH", raising=False)
+        monkeypatch.delenv("GONEBY_DATA_DIR", raising=False)
+
+        store = tmp_path / "profile" / "plugin-data" / "goneby"
+        assert GoneByConfig.from_env().wal_path == store / "wal"
+        assert default_config_path() == store / "config.json"

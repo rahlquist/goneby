@@ -221,9 +221,12 @@ catalog, git URL, or pinned `--ref` — is self-contained. No path editing.
 Optional tuning without env vars — non-secret knobs live in plugin config:
 `plugins.entries.goneby.settings.auto_capture/auto_recall/judge_batch/judge_concurrency/judge_max_chars`
 (the `GONEBY_*` env vars remain as a fallback). The data dir (WAL + policy
-file) defaults to `~/.goneby/` for the CLI, the MCP server, and the Hermes
-plugin alike — one shared store, no split-brain. Set `GONEBY_DATA_DIR` per
-profile for a private store, or `GONEBY_WAL_PATH` to relocate outright.
+file) defaults to `~/.goneby/` for the standalone CLI and MCP server. Under a
+Hermes profile the plugin keeps its own store at
+`<HERMES_HOME>/plugin-data/goneby/` — profiles are isolated on purpose, so two
+profiles working the same project never read each other's log. Set
+`GONEBY_DATA_DIR` to share one store explicitly (the CLI and MCP server honour
+it too), or `GONEBY_WAL_PATH` to relocate the WAL outright.
 (If a capability probe says `No module named 'goneby'` right after enabling,
 that is the documented transitional state — restart and validate again.)
 
@@ -247,7 +250,7 @@ disable-by-default `opt-in` mode. Full table: README §Capture policy.
 | Smoke: `vector backend reachable` fails | Valkey not running (`valkey-cli ping`) or wrong `GONEBY_VALKEY_PORT`/backend. |
 | Smoke: `semantic ranking sane` fails | Your embedder is serving a chat model or non-MRL embedding. Use the Qwen3 GGUF above, or another verified embeddings endpoint. |
 | WAL reads show `CORRUPTED` entries | Key mismatch — that WAL was written with a different `GONEBY_ENCRYPTION_KEY`, or lines were tampered with. Entries encrypted under other keys can never be decrypted. |
-| Plugin enabled but nothing lands in `~/.goneby/wal/` | Check `/goneby status` — it prints the effective verdict and which control (gate / platform kill / marker / opt-in mode) produced it. Also confirm the gateway was restarted. |
+| Plugin enabled but nothing lands in the profile WAL | Check `/goneby status` — it prints the effective verdict and which control (gate / platform kill / marker / opt-in mode) produced it. Also confirm the gateway was restarted. Default store is `<HERMES_HOME>/plugin-data/goneby/`; `goneby status` prints the resolved path. |
 | `goneby status` raises `IsADirectoryError` | You're on a pre-fix checkout — pull latest. |
 
 ---

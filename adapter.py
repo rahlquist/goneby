@@ -149,21 +149,29 @@ class GoneByPlugin:
         self._loop: Any = None
         self._loop_thread: threading.Thread | None = None
 
-        from goneby.config.settings import GoneByConfig, project_wal_path
+        from goneby.config.settings import (
+            GoneByConfig,
+            default_data_dir,
+            project_wal_path,
+        )
 
         self._scoped_env = _ScopedEnv()
         self._config = GoneByConfig.from_env(self._scoped_env)
 
-        # One WAL for all frontends (ctx-audit: the CLI wrote ~/.goneby/wal
-        # while the plugin silently rewrote the path to plugin-data, so
-        # neither side ever saw the other's entries). Default is the packaged
-        # ~/.goneby; set GONEBY_DATA_DIR for a profile-private store, or
-        # GONEBY_WAL_PATH to relocate outright.
+        # Profile isolation first (catalog review, PR #155972): under Hermes the
+        # store defaults to <hermes-home>/plugin-data/goneby, so two profiles
+        # working the same project never append to, or walk, each other's log.
+        # The standalone CLI/MCP keeps the shared ~/.goneby; GONEBY_DATA_DIR is
+        # the explicit opt-in to one shared store, and GONEBY_WAL_PATH relocates
+        # the WAL outright.
         data_env = self._env("GONEBY_DATA_DIR", "").strip()
         if data_env:
             self._data_dir = Path(data_env).expanduser()
         else:
-            self._data_dir = Path("~/.goneby").expanduser()
+            home = _hermes_home()
+            self._data_dir = (
+                home / "plugin-data" / "goneby" if home is not None else default_data_dir()
+            )
         if not self._env("GONEBY_WAL_PATH", "").strip():
             self._config.wal_path = self._data_dir / "wal"
         self._wal_path = project_wal_path(self._config.wal_path, self._config.project)
